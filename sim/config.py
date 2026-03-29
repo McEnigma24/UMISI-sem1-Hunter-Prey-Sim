@@ -12,7 +12,16 @@ class SimConfig:
     plant_energy_value: float = 35.0
     move_cost: float = 2.0
     idle_cost_prey: float = 1.5
-    idle_cost_hunter: float = 5.0
+    idle_cost_hunter: float = 8.0
+
+    # Akumulator ruchu: co krok symulacji += stride; za każde pełne 1.0 jeden sub-ruch o 1 pole.
+    prey_move_stride: float = 1.0
+    hunter_move_stride: float = 1.2
+    # Limit sub-ruchów z jednego aktywowania agenta (ochrona przed pętlą; realny max ≈ floor(acc+stride)).
+    max_submoves_per_tick: int = 16
+    # Przy podziale na wątki: max komórek skoku w jednym kroku + halo (granica ± halo) do synchronizacji.
+    max_jump_cells_for_sync: int = 2
+    partition_sync_halo: int = 1
 
     prey_breed_threshold: float = 140.0
     prey_breed_cost: float = 70.0

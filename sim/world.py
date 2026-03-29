@@ -102,6 +102,7 @@ class World:
         self.agent_kind: list[list[int]] = [[AGENT_NONE for _ in range(w)] for _ in range(h)]
         self.agent_energy: list[list[float]] = [[0.0 for _ in range(w)] for _ in range(h)]
         self.agent_id: list[list[int]] = [[0 for _ in range(w)] for _ in range(h)]
+        self.agent_move_acc: list[list[float]] = [[0.0 for _ in range(w)] for _ in range(h)]
         self._next_uid = 1
 
         self._plants_next: list[list[float]] = [[0.0 for _ in range(w)] for _ in range(h)]
@@ -148,6 +149,7 @@ class World:
                 self.agent_kind[y][x] = kind
                 self.agent_energy[y][x] = energy
                 self.agent_id[y][x] = self._alloc_uid()
+                self.agent_move_acc[y][x] = 0.0
                 return True
         return False
 
@@ -323,26 +325,37 @@ class World:
                 dx = 0
         return dx, dy
 
-    def _cell_blocked_snap(
-        self, sk: list[list[int]], x: int, y: int, ox: int, oy: int
+    def _cell_blocked_prey_dynamic(
+        self, nk: list[list[int]], nid: list[list[int]], nx: int, ny: int, uid: int
     ) -> bool:
-        if not self._in_bounds(x, y):
+        """True = nie można wejść (kolizja z innym agentem w nk)."""
+        if not self._in_bounds(nx, ny):
             return True
-        if x == ox and y == oy:
+        k = nk[ny][nx]
+        if k == AGENT_NONE:
             return False
-        return sk[y][x] != AGENT_NONE
+        if k == AGENT_HUNTER:
+            return True
+        if k == AGENT_PREY:
+            return nid[ny][nx] != uid
+        return True
 
-    def _best_flee_dir(
-        self, sk: list[list[int]], ax: int, ay: int, hx: int, hy: int
+    def _best_flee_dir_dynamic(
+        self,
+        nk: list[list[int]],
+        nid: list[list[int]],
+        ax: int,
+        ay: int,
+        hx: int,
+        hy: int,
+        uid: int,
     ) -> tuple[int, int] | None:
         best: tuple[int, int] | None = None
         best_gain = -999
         d0 = self._manhattan(ax, ay, hx, hy)
         for dx, dy in DIRS_4:
             nx, ny = ax + dx, ay + dy
-            if not self._in_bounds(nx, ny):
-                continue
-            if self._cell_blocked_snap(sk, nx, ny, ax, ay):
+            if self._cell_blocked_prey_dynamic(nk, nid, nx, ny, uid):
                 continue
             d1 = self._manhattan(nx, ny, hx, hy)
             gain = d1 - d0
@@ -351,82 +364,105 @@ class World:
                 best = (dx, dy)
         return best
 
-    def _random_valid_dir(self, sk: list[list[int]], ax: int, ay: int) -> tuple[int, int] | None:
+    def _random_valid_dir_dynamic(
+        self, nk: list[list[int]], nid: list[list[int]], ax: int, ay: int, uid: int
+    ) -> tuple[int, int] | None:
+        opts: list[tuple[int, int]] = []
+        for dx, dy in DIRS_4:
+            nx, ny = ax + dx, ay + dy
+            if not self._cell_blocked_prey_dynamic(nk, nid, nx, ny, uid):
+                opts.append((dx, dy))
+        return self.rng.choice(opts) if opts else None
+
+    def _random_valid_hunter_dynamic(
+        self, nk: list[list[int]], nid: list[list[int]], ax: int, ay: int, uid: int
+    ) -> tuple[int, int] | None:
+        """Losowy krok tylko na puste pole (bez ataku — polowanie idzie przez AI)."""
         opts = []
         for dx, dy in DIRS_4:
             nx, ny = ax + dx, ay + dy
             if not self._in_bounds(nx, ny):
                 continue
-            if self._cell_blocked_snap(sk, nx, ny, ax, ay):
+            if nk[ny][nx] != AGENT_NONE:
                 continue
             opts.append((dx, dy))
         return self.rng.choice(opts) if opts else None
 
-    def _try_apply_move_prey(
+    def _prey_substep_walk(
         self,
-        sk: list[list[int]],
         nk: list[list[int]],
         ne: list[list[float]],
         nid: list[list[int]],
-        x: int,
-        y: int,
+        nacc: list[list[float]],
+        cx: int,
+        cy: int,
         dx: int,
         dy: int,
-        energy: float,
         uid: int,
-    ) -> tuple[int, int, float]:
-        nx, ny = x + dx, y + dy
-        if not self._in_bounds(nx, ny):
-            return x, y, energy
-        if self._cell_blocked_snap(sk, nx, ny, x, y):
-            return x, y, energy
-        new_e = energy - self.cfg.move_cost
-        nk[y][x] = AGENT_NONE
-        ne[y][x] = 0.0
-        nid[y][x] = 0
+    ) -> tuple[bool, int, int]:
+        nx, ny = cx + dx, cy + dy
+        if self._cell_blocked_prey_dynamic(nk, nid, nx, ny, uid):
+            return False, cx, cy
+        e = ne[cy][cx] - self.cfg.move_cost
+        val = nacc[cy][cx]
+        rem = val - 1.0
+        nk[cy][cx] = AGENT_NONE
+        ne[cy][cx] = 0.0
+        nid[cy][cx] = 0
+        nacc[cy][cx] = 0.0
         nk[ny][nx] = AGENT_PREY
-        ne[ny][nx] = new_e
+        ne[ny][nx] = e
         nid[ny][nx] = uid
-        return nx, ny, new_e
+        nacc[ny][nx] = rem
+        return True, nx, ny
 
-    def _try_apply_move_hunter(
+    def _hunter_substep(
         self,
-        sk: list[list[int]],
-        se: list[list[float]],
         nk: list[list[int]],
         ne: list[list[float]],
         nid: list[list[int]],
-        x: int,
-        y: int,
+        nacc: list[list[float]],
+        cx: int,
+        cy: int,
         dx: int,
         dy: int,
-        energy: float,
         uid: int,
-    ) -> tuple[int, int, float]:
-        nx, ny = x + dx, y + dy
+    ) -> tuple[bool, int, int]:
+        nx, ny = cx + dx, cy + dy
         if not self._in_bounds(nx, ny):
-            return x, y, energy
-        if sk[ny][nx] == AGENT_PREY:
-            meal = max(15.0, se[ny][nx] * 0.9)
+            return False, cx, cy
+        e = ne[cy][cx]
+        val = nacc[cy][cx]
+        rem = val - 1.0
+        if nk[ny][nx] == AGENT_PREY:
+            meal = max(15.0, ne[ny][nx] * 0.9)
             nk[ny][nx] = AGENT_NONE
             ne[ny][nx] = 0.0
             nid[ny][nx] = 0
-            nk[y][x] = AGENT_NONE
-            ne[y][x] = 0.0
-            nid[y][x] = 0
+            nacc[ny][nx] = 0.0
+            nk[cy][cx] = AGENT_NONE
+            ne[cy][cx] = 0.0
+            nid[cy][cx] = 0
+            nacc[cy][cx] = 0.0
             nk[ny][nx] = AGENT_HUNTER
-            ne[ny][nx] = energy + meal - self.cfg.move_cost
+            ne[ny][nx] = e + meal - self.cfg.move_cost
             nid[ny][nx] = uid
-            return nx, ny, ne[ny][nx]
-        if self._cell_blocked_snap(sk, nx, ny, x, y):
-            return x, y, energy
-        nk[y][x] = AGENT_NONE
-        ne[y][x] = 0.0
-        nid[y][x] = 0
+            nacc[ny][nx] = rem
+            return True, nx, ny
+        if nk[ny][nx] == AGENT_HUNTER and nid[ny][nx] != uid:
+            return False, cx, cy
+        if nk[ny][nx] != AGENT_NONE:
+            return False, cx, cy
+        new_e = e - self.cfg.move_cost
+        nk[cy][cx] = AGENT_NONE
+        ne[cy][cx] = 0.0
+        nid[cy][cx] = 0
+        nacc[cy][cx] = 0.0
         nk[ny][nx] = AGENT_HUNTER
-        ne[ny][nx] = energy - self.cfg.move_cost
+        ne[ny][nx] = new_e
         nid[ny][nx] = uid
-        return nx, ny, ne[ny][nx]
+        nacc[ny][nx] = rem
+        return True, nx, ny
 
     def _prey_phase(self) -> None:
         c = self.cfg
@@ -441,6 +477,7 @@ class World:
         nk = _copy_i(sk)
         ne = _copy_f(self.agent_energy)
         nid = _copy_i(self.agent_id)
+        nacc = _copy_f(self.agent_move_acc)
 
         positions = [(x, y) for y in range(h) for x in range(w) if sk[y][x] == AGENT_PREY]
         self.rng.shuffle(positions)
@@ -454,46 +491,54 @@ class World:
                 nk[y][x] = AGENT_NONE
                 ne[y][x] = 0.0
                 nid[y][x] = 0
+                nacc[y][x] = 0.0
                 self._deposit_carrion(nce, nca, x, y, self._carrion_drop(AGENT_PREY, e))
                 continue
             ne[y][x] = e
 
-            vr = c.prey_vision_radius
-            threat = self._nearest_agent_cell(sk, x, y, vr, AGENT_HUNTER)
-            dx, dy = 0, 0
-            if threat is not None:
-                hx, hy = threat
-                flee = self._best_flee_dir(sk, x, y, hx, hy)
-                if flee is not None:
-                    dx, dy = flee
-            if dx == 0 and dy == 0:
-                tgt = self._nearest_plant_cell(sp, x, y, vr)
-                if tgt is not None:
-                    tx, ty = tgt
-                    dx, dy = self._step_toward(x, y, tx, ty)
-            if dx == 0 and dy == 0:
-                rd = self._random_valid_dir(sk, x, y)
-                if rd is not None:
-                    dx, dy = rd
-
             cx, cy = x, y
             uid = sid
-            if dx != 0 or dy != 0:
-                cx, cy, e = self._try_apply_move_prey(sk, nk, ne, nid, x, y, dx, dy, ne[y][x], uid)
-            else:
-                e = ne[cy][cx]
+            nacc[cy][cx] += c.prey_move_stride
+            sub = 0
+            while nacc[cy][cx] >= 1.0 - 1e-12 and sub < c.max_submoves_per_tick:
+                sub += 1
+                if nk[cy][cx] != AGENT_PREY or nid[cy][cx] != uid:
+                    break
+                vr = c.prey_vision_radius
+                threat = self._nearest_agent_cell(sk, cx, cy, vr, AGENT_HUNTER)
+                dx, dy = 0, 0
+                if threat is not None:
+                    hx, hy = threat
+                    flee = self._best_flee_dir_dynamic(nk, nid, cx, cy, hx, hy, uid)
+                    if flee is not None:
+                        dx, dy = flee
+                if dx == 0 and dy == 0:
+                    tgt = self._nearest_plant_cell(sp, cx, cy, vr)
+                    if tgt is not None:
+                        tx, ty = tgt
+                        dx, dy = self._step_toward(cx, cy, tx, ty)
+                if dx == 0 and dy == 0:
+                    rd = self._random_valid_dir_dynamic(nk, nid, cx, cy, uid)
+                    if rd is not None:
+                        dx, dy = rd
+                if dx == 0 and dy == 0:
+                    break
+                ok, cx, cy = self._prey_substep_walk(nk, ne, nid, nacc, cx, cy, dx, dy, uid)
+                if not ok:
+                    break
 
             if nk[cy][cx] == AGENT_PREY and np_[cy][cx] > 0:
-                e += np_[cy][cx]
+                ne[cy][cx] += np_[cy][cx]
                 np_[cy][cx] = 0.0
-                ne[cy][cx] = e
 
             if nk[cy][cx] != AGENT_PREY:
                 continue
+            e = ne[cy][cx]
             if e <= 0:
                 nk[cy][cx] = AGENT_NONE
                 ne[cy][cx] = 0.0
                 nid[cy][cx] = 0
+                nacc[cy][cx] = 0.0
                 self._deposit_carrion(nce, nca, cx, cy, self._carrion_drop(AGENT_PREY, e))
                 continue
 
@@ -508,6 +553,7 @@ class World:
                     nk[ty][tx] = AGENT_PREY
                     ne[ty][tx] = c.prey_start_energy
                     nid[ty][tx] = self._alloc_uid()
+                    nacc[ty][tx] = 0.0
                     ne[cy][cx] = e - c.prey_breed_cost
 
             e = ne[cy][cx]
@@ -515,22 +561,24 @@ class World:
                 nk[cy][cx] = AGENT_NONE
                 ne[cy][cx] = 0.0
                 nid[cy][cx] = 0
+                nacc[cy][cx] = 0.0
                 self._deposit_carrion(nce, nca, cx, cy, self._carrion_drop(AGENT_PREY, e))
 
         self.plants, self.carrion_energy, self.carrion_age = np_, nce, nca
         self.agent_kind, self.agent_energy, self.agent_id = nk, ne, nid
+        self.agent_move_acc = nacc
 
     def _hunter_phase(self) -> None:
         c = self.cfg
         w, h = c.width, c.height
-        sp = _copy_f(self.plants)
         sce, sca = _copy_f(self.carrion_energy), _copy_i(self.carrion_age)
         sk, se = _copy_i(self.agent_kind), _copy_f(self.agent_energy)
         ssid = _copy_i(self.agent_id)
 
-        np_, nce, nca = _copy_f(sp), _copy_f(sce), _copy_i(sca)
+        np_, nce, nca = _copy_f(self.plants), _copy_f(sce), _copy_i(sca)
         nk, ne = _copy_i(sk), _copy_f(se)
         nid = _copy_i(self.agent_id)
+        nacc = _copy_f(self.agent_move_acc)
 
         positions = [(x, y) for y in range(h) for x in range(w) if sk[y][x] == AGENT_HUNTER]
         self.rng.shuffle(positions)
@@ -544,38 +592,44 @@ class World:
                 nk[y][x] = AGENT_NONE
                 ne[y][x] = 0.0
                 nid[y][x] = 0
+                nacc[y][x] = 0.0
                 self._deposit_carrion(nce, nca, x, y, self._carrion_drop(AGENT_HUNTER, e))
                 continue
 
             ne[y][x] = e
-            vr = c.hunter_vision_radius
-            prey_cell = self._nearest_agent_cell(sk, x, y, vr, AGENT_PREY)
-            dx, dy = 0, 0
-            if prey_cell is not None:
-                px, py = prey_cell
-                dx, dy = self._step_toward(x, y, px, py)
-            if dx == 0 and dy == 0:
-                cc = self._nearest_carrion_cell(sce, x, y, vr)
-                if cc is not None:
-                    cx, cy = cc
-                    dx, dy = self._step_toward(x, y, cx, cy)
-            if dx == 0 and dy == 0:
-                rd = self._random_valid_dir(sk, x, y)
-                if rd is not None:
-                    dx, dy = rd
-
             hx, hy = x, y
             uid = sid
-            if dx != 0 or dy != 0:
-                hx, hy, e = self._try_apply_move_hunter(sk, se, nk, ne, nid, x, y, dx, dy, ne[y][x], uid)
-            else:
-                e = ne[y][x]
+            nacc[hy][hx] += c.hunter_move_stride
+            sub = 0
+            while nacc[hy][hx] >= 1.0 - 1e-12 and sub < c.max_submoves_per_tick:
+                sub += 1
+                if nk[hy][hx] != AGENT_HUNTER or nid[hy][hx] != uid:
+                    break
+                vr = c.hunter_vision_radius
+                prey_cell = self._nearest_agent_cell(nk, hx, hy, vr, AGENT_PREY)
+                dx, dy = 0, 0
+                if prey_cell is not None:
+                    px, py = prey_cell
+                    dx, dy = self._step_toward(hx, hy, px, py)
+                if dx == 0 and dy == 0:
+                    cc = self._nearest_carrion_cell(nce, hx, hy, vr)
+                    if cc is not None:
+                        cx, cy = cc
+                        dx, dy = self._step_toward(hx, hy, cx, cy)
+                if dx == 0 and dy == 0:
+                    rd = self._random_valid_hunter_dynamic(nk, nid, hx, hy, uid)
+                    if rd is not None:
+                        dx, dy = rd
+                if dx == 0 and dy == 0:
+                    break
+                ok, hx, hy = self._hunter_substep(nk, ne, nid, nacc, hx, hy, dx, dy, uid)
+                if not ok:
+                    break
 
             if nk[hy][hx] == AGENT_HUNTER and nce[hy][hx] > 0:
-                e = ne[hy][hx] + nce[hy][hx] * 0.95
+                ne[hy][hx] += nce[hy][hx] * 0.95
                 nce[hy][hx] = 0.0
                 nca[hy][hx] = 0
-                ne[hy][hx] = e
 
             if nk[hy][hx] != AGENT_HUNTER:
                 continue
@@ -584,6 +638,7 @@ class World:
                 nk[hy][hx] = AGENT_NONE
                 ne[hy][hx] = 0.0
                 nid[hy][hx] = 0
+                nacc[hy][hx] = 0.0
                 self._deposit_carrion(nce, nca, hx, hy, self._carrion_drop(AGENT_HUNTER, e))
                 continue
 
@@ -598,6 +653,7 @@ class World:
                     nk[ty][tx] = AGENT_HUNTER
                     ne[ty][tx] = c.hunter_start_energy
                     nid[ty][tx] = self._alloc_uid()
+                    nacc[ty][tx] = 0.0
                     ne[hy][hx] = e - c.hunter_breed_cost
 
             e = ne[hy][hx]
@@ -605,10 +661,12 @@ class World:
                 nk[hy][hx] = AGENT_NONE
                 ne[hy][hx] = 0.0
                 nid[hy][hx] = 0
+                nacc[hy][hx] = 0.0
                 self._deposit_carrion(nce, nca, hx, hy, self._carrion_drop(AGENT_HUNTER, e))
 
         self.plants, self.carrion_energy, self.carrion_age = np_, nce, nca
         self.agent_kind, self.agent_energy, self.agent_id = nk, ne, nid
+        self.agent_move_acc = nacc
 
     def count_plants(self) -> int:
         return sum(1 for row in self.plants for v in row if v > 0)

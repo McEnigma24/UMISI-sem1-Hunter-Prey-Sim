@@ -15,7 +15,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--width", type=int, default=40, help="Grid width")
     p.add_argument("--height", type=int, default=30, help="Grid height")
     p.add_argument("--seed", type=int, default=None, help="RNG seed (default: from config)")
-    p.add_argument("--delay-preset", type=int, default=2, help="Initial delay preset index 0..6 (see runner)")
+    p.add_argument("--delay-preset", type=int, default=0, help="Initial delay preset index 0..6 (0 = no delay)")
     p.add_argument("--spf", type=int, default=1, help="Initial steps per frame (turbo: use 64–4096)")
     p.add_argument(
         "--window",

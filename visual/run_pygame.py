@@ -43,7 +43,7 @@ def _compute_window_for_grid(
 def run_pygame(
     cfg: SimConfig | None = None,
     window_size: tuple[int, int] | None = None,
-    initial_delay_index: int = 2,
+    initial_delay_index: int = 0,
     initial_steps_per_frame: int = 1,
 ) -> None:
     cfg = cfg or SimConfig()
