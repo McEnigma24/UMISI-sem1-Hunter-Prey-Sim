@@ -1,2 +1,6 @@
 __pycache__/
 
+# Default Park MARL training outputs
+park_population.png
+park_population.csv
+
