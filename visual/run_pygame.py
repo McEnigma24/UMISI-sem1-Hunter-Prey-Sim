@@ -10,39 +10,32 @@ matplotlib.use("TkAgg")
 import pygame
 
 from sim.config import SimConfig
-from sim.entities import AGENT_HUNTER, AGENT_PREY
-from sim.genome import VISION_RANGE
-from sim.world import World
+from sim.world import SPECIES_PREDATOR, SPECIES_PREY, World
 from visual.plots import LiveCharts, save_history_csv, show_population_plot
 
 DELAY_PRESETS = (0.0, 0.02, 0.05, 0.1, 0.2, 0.35, 0.6)
 
-# Layout: HUD text at top; grid uses the rest
 _HUD_LINES_PX = 72
 _PAD = 14
-_MIN_CELL_PX = 2
-_MAX_CELL_PX = 28
 
 
-def _compute_window_for_grid(
-    gw: int,
-    gh: int,
+def _compute_window(
+    aspect: float,
     *,
     max_w: int,
     max_h: int,
 ) -> tuple[int, int]:
-    """Window size so the grid fits with a reasonable cell size (capped by monitor)."""
     inner_w = max(1, max_w - 2 * _PAD)
     inner_h = max(1, max_h - _HUD_LINES_PX - _PAD)
-    cell = min(
-        _MAX_CELL_PX,
-        inner_w // max(1, gw),
-        inner_h // max(1, gh),
-    )
-    cell = max(_MIN_CELL_PX, cell)
-    win_w = min(max_w, gw * cell + 2 * _PAD)
-    win_h = min(max_h, gh * cell + _HUD_LINES_PX + _PAD)
-    return max(320, win_w), max(240, win_h)
+    if inner_w / inner_h > aspect:
+        h = inner_h
+        w = int(h * aspect)
+    else:
+        w = inner_w
+        h = int(w / aspect)
+    w = max(400, min(w, inner_w))
+    h = max(300, min(h, inner_h))
+    return max(400, w + 2 * _PAD), max(320, h + _HUD_LINES_PX + _PAD)
 
 
 def run_pygame(
@@ -66,12 +59,13 @@ def run_pygame(
     info = pygame.display.Info()
     max_w = max(800, int(info.current_w * 0.96))
     max_h = max(600, int(info.current_h * 0.92))
+    aspect = cfg.width / max(1e-6, cfg.height)
     if window_size is None:
-        win_w, win_h = _compute_window_for_grid(cfg.width, cfg.height, max_w=max_w, max_h=max_h)
+        win_w, win_h = _compute_window(aspect, max_w=max_w, max_h=max_h)
     else:
         win_w, win_h = window_size
     screen = pygame.display.set_mode((win_w, win_h), pygame.RESIZABLE)
-    pygame.display.set_caption("Hunter–Prey ecosystem")
+    pygame.display.set_caption("Hunter–Prey continuous 2D")
 
     clock = pygame.time.Clock()
     paused = False
@@ -83,70 +77,56 @@ def run_pygame(
 
     def update_caption() -> None:
         pygame.display.set_caption(
-            f"Hunter–Prey {cfg.width}x{cfg.height} | step={world.step_index} delay={step_delay_sec}s spf={steps_per_frame}"
+            f"Hunter–Prey continuous | step={world.step_index} delay={step_delay_sec}s spf={steps_per_frame}"
             + (" PAUSED" if paused else "")
         )
 
-    def cell_pixel_size() -> tuple[int, int, int]:
-        gw, gh = cfg.width, cfg.height
+    def draw_world() -> None:
+        nonlocal last_live_update
+        screen.fill((20, 22, 28))
         sw, sh = screen.get_size()
         avail_w = sw - 2 * _PAD
         avail_h = sh - _HUD_LINES_PX - _PAD
-        if avail_w < gw or avail_h < gh:
-            cell = max(_MIN_CELL_PX, min(avail_w // max(1, gw), avail_h // max(1, gh)))
-        else:
-            cell = max(
-                _MIN_CELL_PX,
-                min(_MAX_CELL_PX, avail_w // gw, avail_h // gh),
-            )
-        grid_pw = cell * gw
-        grid_ph = cell * gh
-        ox = _PAD + (avail_w - grid_pw) // 2
-        oy = _HUD_LINES_PX + (avail_h - grid_ph) // 2
-        return cell, ox, oy
+        ox = _PAD
+        oy = _HUD_LINES_PX
+        W, H = cfg.width, cfg.height
+        scale_x = avail_w / W
+        scale_y = avail_h / H
 
-    def draw_world() -> None:
-        nonlocal last_live_update
-        screen.fill((24, 24, 28))
-        cell, ox, oy = cell_pixel_size()
-        gw, gh = cfg.width, cfg.height
-        lo, hi = cfg.trait_bounds[VISION_RANGE]
+        field_rect = pygame.Rect(ox, oy, avail_w, avail_h)
+        pygame.draw.rect(screen, (32, 36, 44), field_rect)
+        pygame.draw.rect(screen, (60, 64, 72), field_rect, 2)
 
-        for y in range(gh):
-            for x in range(gw):
-                rect = pygame.Rect(ox + x * cell, oy + y * cell, cell, cell)
-                pygame.draw.rect(screen, (32, 32, 38), rect)
+        r_pre = max(2, int(min(scale_x, scale_y) * 0.35))
+        r_pred = max(3, int(min(scale_x, scale_y) * 0.42))
 
-        for y in range(gh):
-            for x in range(gw):
-                k = world.agent_kind[y][x]
-                if k == 0:
-                    continue
-                rect = pygame.Rect(ox + x * cell, oy + y * cell, cell, cell)
-                vr = world.traits[VISION_RANGE][y][x]
-                t = (vr - lo) / max(1e-6, float(hi - lo))
-                if k == AGENT_PREY:
-                    col = (int(80 + 100 * t), int(140 + 80 * (1 - t)), 255)
-                else:
-                    col = (255, int(60 + 120 * (1 - t)), int(60 + 80 * t))
-                inset = max(1, cell // 6)
-                pygame.draw.rect(
+        for a in world.agents:
+            sx = ox + a.x * scale_x
+            sy = oy + a.y * scale_y
+            if a.species == SPECIES_PREY:
+                col = (100, 160, 255)
+                r = r_pre
+            else:
+                col = (255, 90, 90)
+                r = r_pred
+            pygame.draw.circle(screen, col, (int(sx), int(sy)), r)
+            if abs(a.vx) + abs(a.vy) > 1e-3:
+                vm = max(1e-6, (a.vx * a.vx + a.vy * a.vy) ** 0.5)
+                vx, vy = a.vx / vm * 6.0, a.vy / vm * 6.0
+                pygame.draw.line(
                     screen,
-                    col,
-                    rect.inflate(-inset * 2, -inset * 2),
-                    border_radius=max(1, cell // 8),
+                    (200, 200, 200),
+                    (int(sx), int(sy)),
+                    (int(sx + vx * scale_x / 2), int(sy + vy * scale_y / 2)),
+                    1,
                 )
 
-        for y in range(gh):
-            for x in range(gw):
-                rect = pygame.Rect(ox + x * cell, oy + y * cell, cell, cell)
-                pygame.draw.rect(screen, (50, 50, 55), rect, 1)
-
-        pmv = world.mean_trait_prey(VISION_RANGE) if world.count_prey() else 0.0
-        hmv = world.mean_trait_hunter(VISION_RANGE) if world.count_hunters() else 0.0
+        ep = "on" if cfg.evolve_prey else "off"
+        ed = "on" if cfg.evolve_predator else "off"
         hud = (
-            f"SPACE pause | +/- delay | [/] spf | P snapshot plot | S save CSV | R reset | Q quit\n"
-            f"prey={world.count_prey()} hunters={world.count_hunters()} | live charts in Matplotlib window | vision μ: {pmv:.2f} / {hmv:.2f}"
+            "SPACE pause | +/- delay | [/] spf | P snapshot plot | S save CSV | R reset | Q quit\n"
+            f"prey={world.count_prey()} predators={world.count_predators()} | "
+            f"world {W:.0f}x{H:.0f} (torus) | evolve: prey={ep} pred={ed}"
         )
         for i, line in enumerate(hud.split("\n")):
             surf = font.render(line, True, (220, 220, 220))
@@ -196,7 +176,10 @@ def run_pygame(
                 elif event.key == pygame.K_p:
                     show_population_plot(world)
                 elif event.key == pygame.K_s:
-                    save_history_csv(world, Path(__file__).resolve().parent.parent / "plots" / "population_history.csv")
+                    save_history_csv(
+                        world,
+                        Path(__file__).resolve().parent.parent / "plots" / "population_history.csv",
+                    )
 
         if not paused:
             batch = steps_per_frame
