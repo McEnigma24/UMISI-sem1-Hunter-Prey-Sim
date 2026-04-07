@@ -1,336 +1,202 @@
 from __future__ import annotations
 
-import os
 import random
-from concurrent.futures import ThreadPoolExecutor
-from typing import Iterable
 
+from sim.builds import mutate_trait_random_step
 from sim.config import SimConfig
 from sim.entities import AGENT_HUNTER, AGENT_NONE, AGENT_PREY
+from sim.genome import (
+    AGILITY,
+    ARMOR,
+    ATTACK,
+    Genome,
+    SPEED,
+    STAMINA_MAX,
+    STAMINA_REGEN,
+    TRAIT_COUNT,
+    copy_traits_to_grid,
+    read_genome_from_grids,
+)
+from sim.sensors import DIRS_4, facing_index, nearest_visible_agent
+from sim.torus import step_toward_torus, torus_manhattan, wrap_xy
 
-DIRS_4 = ((1, 0), (-1, 0), (0, 1), (0, -1))
-
-
-def _copy_f(g: list[list[float]]) -> list[list[float]]:
-    return [row[:] for row in g]
+DIRS = DIRS_4
 
 
 def _copy_i(g: list[list[int]]) -> list[list[int]]:
     return [row[:] for row in g]
 
 
-def _row_chunks(height: int, n_parts: int) -> list[tuple[int, int]]:
-    if n_parts <= 1 or height <= 0:
-        return [(0, height)]
-    n_parts = min(n_parts, height)
-    base, rem = divmod(height, n_parts)
-    chunks: list[tuple[int, int]] = []
-    y = 0
-    for i in range(n_parts):
-        sz = base + (1 if i < rem else 0)
-        chunks.append((y, y + sz))
-        y += sz
-    return chunks
-
-
-def _env_chunk_parallel(
-    y0: int,
-    y1: int,
-    plants_in: list[list[float]],
-    plants_out: list[list[float]],
-    ce_in: list[list[float]],
-    ca_in: list[list[int]],
-    ce_out: list[list[float]],
-    ca_out: list[list[int]],
-    cfg: SimConfig,
-    step_index: int,
-    rng_seed: int | None,
-) -> None:
-    w = cfg.width
-    sb = rng_seed if rng_seed is not None else 0
-
-    def spawn_u(x: int, y: int) -> float:
-        s = (sb * 0x9E3779B1 ^ step_index * 0x85EBCA77 ^ x * 0xC2B2AE3D ^ y * 0x165667B1) & 0xFFFFFFFF
-        return random.Random(s).random()
-
-    for y in range(y0, y1):
-        for x in range(w):
-            pin = plants_in[y][x]
-            if pin > 0:
-                plants_out[y][x] = pin
-            else:
-                raw_n = 0
-                for dx, dy in DIRS_4:
-                    nx, ny = x + dx, y + dy
-                    if 0 <= nx < w and 0 <= ny < cfg.height and plants_in[ny][nx] > 0:
-                        raw_n += 1
-                n = min(raw_n, cfg.max_neighbors_for_bonus)
-                p = min(1.0, cfg.plant_spawn_base_prob + cfg.plant_neighbor_bonus * n)
-                plants_out[y][x] = cfg.plant_energy_value if spawn_u(x, y) < p else 0.0
-
-            e = ce_in[y][x]
-            if e <= 0:
-                ce_out[y][x] = 0.0
-                ca_out[y][x] = 0
-                continue
-            age = ca_in[y][x] + 1
-            ne = e
-            if age > cfg.carrion_fresh_steps:
-                ne *= cfg.carrion_decay_factor
-            if ne < cfg.carrion_min_energy:
-                ce_out[y][x] = 0.0
-                ca_out[y][x] = 0
-            else:
-                ce_out[y][x] = ne
-                ca_out[y][x] = age
+def _copy_f(g: list[list[float]]) -> list[list[float]]:
+    return [row[:] for row in g]
 
 
 class World:
     """
-    Stan: na komórce max 1 roślina (float), max 1 padlina (float + wiek), max 1 agent (prey XOR hunter).
-    Fazy prey / hunter: snapshot (read-only) → zapis do bufora next → podmiana referencji.
+    Grid: max one agent per cell. No plants/carrion.
+    Genomes: float trait grids per cell (only meaningful where agent_kind != NONE).
+    Combat: symmetric attack vs armor threshold (no HP pool).
     """
 
     def __init__(self, cfg: SimConfig | None = None) -> None:
-        self._shutdown_executor()
         self.cfg = cfg or SimConfig()
         self.rng = random.Random(self.cfg.rng_seed)
         w, h = self.cfg.width, self.cfg.height
-        self.plants: list[list[float]] = [[0.0 for _ in range(w)] for _ in range(h)]
-        self.carrion_energy: list[list[float]] = [[0.0 for _ in range(w)] for _ in range(h)]
-        self.carrion_age: list[list[int]] = [[0 for _ in range(w)] for _ in range(h)]
         self.agent_kind: list[list[int]] = [[AGENT_NONE for _ in range(w)] for _ in range(h)]
-        self.agent_energy: list[list[float]] = [[0.0 for _ in range(w)] for _ in range(h)]
         self.agent_id: list[list[int]] = [[0 for _ in range(w)] for _ in range(h)]
+        self.agent_stamina: list[list[float]] = [[0.0 for _ in range(w)] for _ in range(h)]
+        self.agent_age: list[list[int]] = [[0 for _ in range(w)] for _ in range(h)]
+        self.agent_facing: list[list[int]] = [[0 for _ in range(w)] for _ in range(h)]
+        self.agent_last_dx: list[list[int]] = [[0 for _ in range(w)] for _ in range(h)]
+        self.agent_last_dy: list[list[int]] = [[0 for _ in range(w)] for _ in range(h)]
         self.agent_move_acc: list[list[float]] = [[0.0 for _ in range(w)] for _ in range(h)]
+        self.traits: list[list[list[float]]] = [
+            [[0.0 for _ in range(w)] for _ in range(h)] for _ in range(TRAIT_COUNT)
+        ]
+
         self._next_uid = 1
-
-        self._plants_next: list[list[float]] = [[0.0 for _ in range(w)] for _ in range(h)]
-        self._carrion_energy_next: list[list[float]] = [[0.0 for _ in range(w)] for _ in range(h)]
-        self._carrion_age_next: list[list[int]] = [[0 for _ in range(w)] for _ in range(h)]
-
-        self._executor: ThreadPoolExecutor | None = None
-        self._executor_workers: int | None = None
-
         self.step_index = 0
         self.history_t: list[int] = []
         self.history_plants: list[int] = []
         self.history_prey: list[int] = []
         self.history_hunters: list[int] = []
+        self.history_prey_mean_traits: list[list[float]] = []
+        self.history_hunter_mean_traits: list[list[float]] = []
+        self.history_mutation_prey: list[int] = []
+        self.history_mutation_hunter: list[int] = []
 
         self._bootstrap_population()
-
-    def _bootstrap_population(self) -> None:
-        c = self.cfg
-        w, h = c.width, c.height
-        area = w * h
-        n_prey = max(8, area // 80)
-        n_hunter = max(2, area // 400)
-        for _ in range(n_prey):
-            self._spawn_at_random(AGENT_PREY, c.prey_start_energy)
-        for _ in range(n_hunter):
-            self._spawn_at_random(AGENT_HUNTER, c.hunter_start_energy)
-        for _ in range(area // 25):
-            x, y = self.rng.randrange(w), self.rng.randrange(h)
-            if self.plants[y][x] == 0 and self.agent_kind[y][x] == AGENT_NONE:
-                self.plants[y][x] = c.plant_energy_value
-        self._record_history_snapshot()
 
     def _alloc_uid(self) -> int:
         u = self._next_uid
         self._next_uid += 1
         return u
 
-    def _spawn_at_random(self, kind: int, energy: float) -> bool:
+    def _center_genome(self) -> Genome:
+        return Genome.from_center(self.cfg)
+
+    def _mutation_phase_allows_at_step(self, species: int, step: int) -> bool:
+        """Whether `species` may mutate on simulation step index `step` (hunters first block, then prey)."""
+        c = self.cfg
+        if not c.mutation_phase_alternate or c.mutation_phase_steps <= 0:
+            return True
+        cycle = 2 * c.mutation_phase_steps
+        pos = step % cycle
+        hunter_window = pos < c.mutation_phase_steps
+        if species == AGENT_HUNTER:
+            return hunter_window
+        return not hunter_window
+
+    def _mutation_phase_allows(self, species: int) -> bool:
+        """When True, offspring/spawn may apply random trait mutation; when False, exact copy (spawn still uses neighbor mean)."""
+        return self._mutation_phase_allows_at_step(species, self.step_index)
+
+    def _offspring_genome(self, parent: Genome, species: int) -> Genome:
+        """Breeding / spawn after local mean: clone if mutation phase off, else random trait step."""
+        g = parent.clone().clamped(self.cfg)
+        if not self._mutation_phase_allows(species):
+            return g
+        return mutate_trait_random_step(g, self.rng, self.cfg).clamped(self.cfg)
+
+    def _trait_norm_at(self, trait_idx: int, x: int, y: int) -> float:
+        c = self.cfg
+        lo, hi = c.trait_bounds[trait_idx]
+        v = float(self.traits[trait_idx][y][x])
+        return (v - lo) / max(1e-9, float(hi - lo))
+
+    def _stamina_cap_at(self, x: int, y: int) -> float:
+        c = self.cfg
+        lvl = float(self.traits[STAMINA_MAX][y][x])
+        lo, hi = c.trait_bounds[STAMINA_MAX]
+        t = (lvl - lo) / max(1e-9, float(hi - lo))
+        return c.stamina_base_max + t * float(hi - lo) * c.stamina_per_level
+
+    def _stamina_regen_at(self, x: int, y: int) -> float:
+        c = self.cfg
+        lvl = float(self.traits[STAMINA_REGEN][y][x])
+        lo, hi = c.trait_bounds[STAMINA_REGEN]
+        t = (lvl - lo) / max(1e-9, float(hi - lo))
+        return c.stamina_regen_base + t * float(hi - lo) * c.stamina_regen_per_level * 0.15
+
+    def _stride_at(self, x: int, y: int) -> float:
+        c = self.cfg
+        lvl = float(self.traits[SPEED][y][x])
+        lo, hi = c.trait_bounds[SPEED]
+        t = (lvl - lo) / max(1e-9, float(hi - lo))
+        base = c.speed_stride_min + t * (c.speed_stride_max - c.speed_stride_min)
+        arm = self._trait_norm_at(ARMOR, x, y)
+        base *= max(0.25, 1.0 - c.armor_speed_burden * arm)
+        return base
+
+    def _agility_effective_norm_at(self, x: int, y: int) -> float:
+        c = self.cfg
+        ag = self._trait_norm_at(AGILITY, x, y)
+        arm = self._trait_norm_at(ARMOR, x, y)
+        return max(0.0, ag * (1.0 - c.armor_agility_burden * arm))
+
+    def _turn_stride_factor(self, ldx: int, ldy: int, dx: int, dy: int, x: int, y: int) -> float:
+        c = self.cfg
+        if ldx == 0 and ldy == 0:
+            return 1.0
+        if (dx, dy) == (ldx, ldy):
+            return 1.0
+        mit = c.agility_turn_mitigation * 10.0 * self._agility_effective_norm_at(x, y)
+        if (dx, dy) == (-ldx, -ldy):
+            pen = c.turn_penalty_180 * max(0.0, 1.0 - mit)
+            return max(0.35, 1.0 - min(0.6, pen))
+        pen = c.turn_penalty_90 * max(0.0, 1.0 - mit)
+        return max(0.45, 1.0 - min(0.45, pen))
+
+    def _bootstrap_population(self) -> None:
+        c = self.cfg
+        w, h = c.width, c.height
+        area = w * h
+        n = max(8, area // 80)
+        g0 = self._center_genome()
+        for _ in range(n):
+            self._spawn_at_random(AGENT_PREY, g0.clone(), age=0)
+        for _ in range(n):
+            self._spawn_at_random(AGENT_HUNTER, g0.clone(), age=0)
+        self._record_history_snapshot()
+
+    def _spawn_at_random(self, kind: int, genome: Genome, age: int = 0) -> bool:
         w, h = self.cfg.width, self.cfg.height
-        for _ in range(200):
+        for _ in range(400):
             x, y = self.rng.randrange(w), self.rng.randrange(h)
             if self.agent_kind[y][x] == AGENT_NONE:
+                uid = self._alloc_uid()
                 self.agent_kind[y][x] = kind
-                self.agent_energy[y][x] = energy
-                self.agent_id[y][x] = self._alloc_uid()
+                self.agent_id[y][x] = uid
                 self.agent_move_acc[y][x] = 0.0
+                copy_traits_to_grid(self.traits, x, y, genome)
+                self.agent_stamina[y][x] = self._stamina_cap_at(x, y)
+                self.agent_age[y][x] = age
+                self.agent_facing[y][x] = self.rng.randrange(4)
+                self.agent_last_dx[y][x] = 0
+                self.agent_last_dy[y][x] = 0
                 return True
         return False
+
+    def _genome_for_new_hunter_at(self, x: int, y: int) -> Genome:
+        """Mean trait vector of K nearest hunters (torus), else center; then optional mutation if phase allows."""
+        c = self.cfg
+        k = max(1, c.hunter_spawn_neighbor_count)
+        local = self._mean_genome_k_nearest(x, y, k, AGENT_HUNTER)
+        base = local if local is not None else self._center_genome()
+        return self._offspring_genome(base, AGENT_HUNTER)
 
     def reset(self) -> None:
         self.__init__(self.cfg)
 
-    def _shutdown_executor(self) -> None:
-        ex = getattr(self, "_executor", None)
-        if ex is not None:
-            ex.shutdown(wait=True)
-        self._executor = None
-        self._executor_workers = None
-
-    def _effective_env_workers(self) -> int:
-        c = self.cfg.parallel_env_threads
-        if c == 1:
-            return 1
-        if c <= 0:
-            c = min(8, os.cpu_count() or 4)
-        return max(1, c)
-
-    def _swap_env_buffers(self) -> None:
-        self.plants, self._plants_next = self._plants_next, self.plants
-        self.carrion_energy, self._carrion_energy_next = self._carrion_energy_next, self.carrion_energy
-        self.carrion_age, self._carrion_age_next = self._carrion_age_next, self.carrion_age
-
-    def _parallel_env_step(self) -> None:
-        workers = self._effective_env_workers()
-        h = self.cfg.height
-        chunks = _row_chunks(h, workers)
-        if self._executor is None or self._executor_workers != workers:
-            if self._executor is not None:
-                self._executor.shutdown(wait=True)
-            self._executor = ThreadPoolExecutor(max_workers=workers)
-            self._executor_workers = workers
-        ex = self._executor
-        futures = []
-        for y0, y1 in chunks:
-            futures.append(
-                ex.submit(
-                    _env_chunk_parallel,
-                    y0,
-                    y1,
-                    self.plants,
-                    self._plants_next,
-                    self.carrion_energy,
-                    self.carrion_age,
-                    self._carrion_energy_next,
-                    self._carrion_age_next,
-                    self.cfg,
-                    self.step_index,
-                    self.cfg.rng_seed,
-                )
-            )
-        for f in futures:
-            f.result()
-        self._swap_env_buffers()
-
-    def _manhattan(self, x1: int, y1: int, x2: int, y2: int) -> int:
-        return abs(x1 - x2) + abs(y1 - y2)
-
-    def _in_bounds(self, x: int, y: int) -> bool:
-        return 0 <= x < self.cfg.width and 0 <= y < self.cfg.height
-
-    def _iter_disk(self, cx: int, cy: int, r: int) -> Iterable[tuple[int, int]]:
-        w, h = self.cfg.width, self.cfg.height
-        for dy in range(-r, r + 1):
-            for dx in range(-r, r + 1):
-                if abs(dx) + abs(dy) > r:
-                    continue
-                x, y = cx + dx, cy + dy
-                if 0 <= x < w and 0 <= y < h:
-                    yield x, y
-
-    def _nearest_agent_cell(
-        self, sk: list[list[int]], x: int, y: int, radius: int, kind: int
-    ) -> tuple[int, int] | None:
-        best = None
-        best_d = radius + 1
-        for px, py in self._iter_disk(x, y, radius):
-            if sk[py][px] == kind:
-                d = self._manhattan(x, y, px, py)
-                if d < best_d:
-                    best_d = d
-                    best = (px, py)
-        return best
-
-    def _nearest_plant_cell(
-        self, sp: list[list[float]], x: int, y: int, radius: int
-    ) -> tuple[int, int] | None:
-        best = None
-        best_d = radius + 1
-        for px, py in self._iter_disk(x, y, radius):
-            if sp[py][px] > 0:
-                d = self._manhattan(x, y, px, py)
-                if d < best_d:
-                    best_d = d
-                    best = (px, py)
-        return best
-
-    def _nearest_carrion_cell(
-        self, ce: list[list[float]], x: int, y: int, radius: int
-    ) -> tuple[int, int] | None:
-        best = None
-        best_d = radius + 1
-        for px, py in self._iter_disk(x, y, radius):
-            if ce[py][px] > 0:
-                d = self._manhattan(x, y, px, py)
-                if d < best_d:
-                    best_d = d
-                    best = (px, py)
-        return best
-
-    def _count_plant_neighbors(self, p: list[list[float]], x: int, y: int) -> int:
-        n = 0
-        w, h = self.cfg.width, self.cfg.height
-        for dx, dy in DIRS_4:
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < w and 0 <= ny < h and p[ny][nx] > 0:
-                n += 1
-        return n
-
-    def _grow_plants(self) -> None:
-        c = self.cfg
-        w, h = c.width, c.height
-        for y in range(h):
-            for x in range(w):
-                if self.plants[y][x] > 0:
-                    continue
-                raw_n = self._count_plant_neighbors(self.plants, x, y)
-                n = min(raw_n, c.max_neighbors_for_bonus)
-                p = min(1.0, c.plant_spawn_base_prob + c.plant_neighbor_bonus * n)
-                if self.rng.random() < p:
-                    self.plants[y][x] = c.plant_energy_value
-
-    def _decay_carrion(self) -> None:
-        c = self.cfg
-        h, w = len(self.carrion_energy), len(self.carrion_energy[0])
-        for y in range(h):
-            for x in range(w):
-                e = self.carrion_energy[y][x]
-                if e <= 0:
-                    self.carrion_age[y][x] = 0
-                    continue
-                self.carrion_age[y][x] += 1
-                if self.carrion_age[y][x] > c.carrion_fresh_steps:
-                    e *= c.carrion_decay_factor
-                    self.carrion_energy[y][x] = e
-                if self.carrion_energy[y][x] < c.carrion_min_energy:
-                    self.carrion_energy[y][x] = 0.0
-                    self.carrion_age[y][x] = 0
-
-    def _deposit_carrion(
-        self, ce: list[list[float]], ca: list[list[int]], x: int, y: int, amount: float
-    ) -> None:
-        if amount <= 0:
-            return
-        ce[y][x] += amount
-        ca[y][x] = 0
-
-    def _carrion_drop(self, kind: int, energy: float) -> float:
-        c = self.cfg
-        base = c.prey_start_energy if kind == AGENT_PREY else c.hunter_start_energy
-        return c.meat_fraction_of_body * max(25.0, base * 0.4 + max(0.0, energy))
-
     def _step_toward(self, x: int, y: int, tx: int, ty: int) -> tuple[int, int]:
-        dx = (1 if tx > x else -1) if tx != x else 0
-        dy = (1 if ty > y else -1) if ty != y else 0
-        if dx != 0 and dy != 0:
-            if self.rng.random() < 0.5:
-                dy = 0
-            else:
-                dx = 0
-        return dx, dy
+        w, h = self.cfg.width, self.cfg.height
+        return step_toward_torus(x, y, tx, ty, w, h, self.rng)
 
-    def _cell_blocked_prey_dynamic(
+    def _cell_blocked_prey(
         self, nk: list[list[int]], nid: list[list[int]], nx: int, ny: int, uid: int
     ) -> bool:
-        """True = nie można wejść (kolizja z innym agentem w nk)."""
-        if not self._in_bounds(nx, ny):
-            return True
+        w, h = self.cfg.width, self.cfg.height
+        nx, ny = wrap_xy(nx, ny, w, h)
         k = nk[ny][nx]
         if k == AGENT_NONE:
             return False
@@ -340,7 +206,7 @@ class World:
             return nid[ny][nx] != uid
         return True
 
-    def _best_flee_dir_dynamic(
+    def _best_flee_dir(
         self,
         nk: list[list[int]],
         nid: list[list[int]],
@@ -350,43 +216,76 @@ class World:
         hy: int,
         uid: int,
     ) -> tuple[int, int] | None:
+        w, h = self.cfg.width, self.cfg.height
         best: tuple[int, int] | None = None
         best_gain = -999
-        d0 = self._manhattan(ax, ay, hx, hy)
-        for dx, dy in DIRS_4:
-            nx, ny = ax + dx, ay + dy
-            if self._cell_blocked_prey_dynamic(nk, nid, nx, ny, uid):
+        d0 = torus_manhattan(ax, ay, hx, hy, w, h)
+        for dx, dy in DIRS:
+            nx, ny = wrap_xy(ax + dx, ay + dy, w, h)
+            if self._cell_blocked_prey(nk, nid, nx, ny, uid):
                 continue
-            d1 = self._manhattan(nx, ny, hx, hy)
+            d1 = torus_manhattan(nx, ny, hx, hy, w, h)
             gain = d1 - d0
             if gain > best_gain:
                 best_gain = gain
                 best = (dx, dy)
         return best
 
-    def _random_valid_dir_dynamic(
+    def _random_valid_dir_prey(
         self, nk: list[list[int]], nid: list[list[int]], ax: int, ay: int, uid: int
     ) -> tuple[int, int] | None:
+        w, h = self.cfg.width, self.cfg.height
         opts: list[tuple[int, int]] = []
-        for dx, dy in DIRS_4:
-            nx, ny = ax + dx, ay + dy
-            if not self._cell_blocked_prey_dynamic(nk, nid, nx, ny, uid):
+        for dx, dy in DIRS:
+            tx, ty = wrap_xy(ax + dx, ay + dy, w, h)
+            if not self._cell_blocked_prey(nk, nid, tx, ty, uid):
                 opts.append((dx, dy))
         return self.rng.choice(opts) if opts else None
 
-    def _random_valid_hunter_dynamic(
-        self, nk: list[list[int]], nid: list[list[int]], ax: int, ay: int, uid: int
+    def _random_valid_dir_hunter_empty(
+        self, nk: list[list[int]], nx: int, ny: int
     ) -> tuple[int, int] | None:
-        """Losowy krok tylko na puste pole (bez ataku — polowanie idzie przez AI)."""
-        opts = []
-        for dx, dy in DIRS_4:
-            nx, ny = ax + dx, ay + dy
-            if not self._in_bounds(nx, ny):
-                continue
-            if nk[ny][nx] != AGENT_NONE:
-                continue
-            opts.append((dx, dy))
+        w, h = self.cfg.width, self.cfg.height
+        opts: list[tuple[int, int]] = []
+        for dx, dy in DIRS:
+            tx, ty = wrap_xy(nx + dx, ny + dy, w, h)
+            if nk[ty][tx] == AGENT_NONE:
+                opts.append((dx, dy))
         return self.rng.choice(opts) if opts else None
+
+    def _try_prey_breed(
+        self,
+        nk: list[list[int]],
+        ne: list[list[float]],
+        nid: list[list[int]],
+        nacc: list[list[float]],
+        cx: int,
+        cy: int,
+    ) -> None:
+        c = self.cfg
+        if self.rng.random() >= c.p_prey_breed:
+            return
+        w, h = c.width, c.height
+        opts: list[tuple[int, int]] = []
+        for ddx, ddy in DIRS:
+            tx, ty = wrap_xy(cx + ddx, cy + ddy, w, h)
+            if nk[ty][tx] == AGENT_NONE:
+                opts.append((tx, ty))
+        if not opts:
+            return
+        tx, ty = self.rng.choice(opts)
+        g = read_genome_from_grids(self.traits, cx, cy)
+        child = self._offspring_genome(g, AGENT_PREY)
+        uid = self._alloc_uid()
+        nk[ty][tx] = AGENT_PREY
+        nid[ty][tx] = uid
+        nacc[ty][tx] = 0.0
+        copy_traits_to_grid(self.traits, tx, ty, child)
+        ne[ty][tx] = self._stamina_cap_at(tx, ty)
+        self.agent_age[ty][tx] = 0
+        self.agent_facing[ty][tx] = self.rng.randrange(4)
+        self.agent_last_dx[ty][tx] = 0
+        self.agent_last_dy[ty][tx] = 0
 
     def _prey_substep_walk(
         self,
@@ -400,21 +299,57 @@ class World:
         dy: int,
         uid: int,
     ) -> tuple[bool, int, int]:
-        nx, ny = cx + dx, cy + dy
-        if self._cell_blocked_prey_dynamic(nk, nid, nx, ny, uid):
+        w, h = self.cfg.width, self.cfg.height
+        nx, ny = wrap_xy(cx + dx, cy + dy, w, h)
+        if self._cell_blocked_prey(nk, nid, nx, ny, uid):
             return False, cx, cy
-        e = ne[cy][cx] - self.cfg.move_cost
-        val = nacc[cy][cx]
-        rem = val - 1.0
+        ldx, ldy = self.agent_last_dx[cy][cx], self.agent_last_dy[cy][cx]
+        fac = self._turn_stride_factor(ldx, ldy, dx, dy, cx, cy)
+        rem = nacc[cy][cx] - 1.0
+        cost = self.cfg.move_cost_base * max(0.25, fac)
+        e = ne[cy][cx] - cost
+        if e <= 0:
+            return False, cx, cy
+        saved = tuple(self.traits[k][cy][cx] for k in range(TRAIT_COUNT))
+        age = self.agent_age[cy][cx]
         nk[cy][cx] = AGENT_NONE
         ne[cy][cx] = 0.0
         nid[cy][cx] = 0
         nacc[cy][cx] = 0.0
+        for k in range(TRAIT_COUNT):
+            self.traits[k][cy][cx] = 0.0
+        self.agent_age[cy][cx] = 0
+
         nk[ny][nx] = AGENT_PREY
         ne[ny][nx] = e
         nid[ny][nx] = uid
         nacc[ny][nx] = rem
+        self.agent_age[ny][nx] = age
+        for k in range(TRAIT_COUNT):
+            self.traits[k][ny][nx] = saved[k]
+        self.agent_facing[ny][nx] = facing_index(dx, dy)
+        self.agent_last_dx[ny][nx], self.agent_last_dy[ny][nx] = dx, dy
+        cap = self._stamina_cap_at(nx, ny)
+        if ne[ny][nx] > cap:
+            ne[ny][nx] = cap
         return True, nx, ny
+
+    def _clear_cell(
+        self,
+        nk: list[list[int]],
+        ne: list[list[float]],
+        nid: list[list[int]],
+        nacc: list[list[float]],
+        x: int,
+        y: int,
+    ) -> None:
+        nk[y][x] = AGENT_NONE
+        ne[y][x] = 0.0
+        nid[y][x] = 0
+        nacc[y][x] = 0.0
+        for k in range(TRAIT_COUNT):
+            self.traits[k][y][x] = 0.0
+        self.agent_age[y][x] = 0
 
     def _hunter_substep(
         self,
@@ -427,55 +362,118 @@ class World:
         dx: int,
         dy: int,
         uid: int,
-    ) -> tuple[bool, int, int]:
-        nx, ny = cx + dx, cy + dy
-        if not self._in_bounds(nx, ny):
-            return False, cx, cy
+    ) -> tuple[str, int, int]:
+        """Returns (result, x, y)."""
+        w, h = self.cfg.width, self.cfg.height
+        nx, ny = wrap_xy(cx + dx, cy + dy, w, h)
+        ldx, ldy = self.agent_last_dx[cy][cx], self.agent_last_dy[cy][cx]
+        fac = self._turn_stride_factor(ldx, ldy, dx, dy, cx, cy)
+        rem = nacc[cy][cx] - 1.0
+        cost = self.cfg.move_cost_base * max(0.25, fac)
         e = ne[cy][cx]
-        val = nacc[cy][cx]
-        rem = val - 1.0
+
         if nk[ny][nx] == AGENT_PREY:
-            meal = max(15.0, ne[ny][nx] * 0.9)
-            nk[ny][nx] = AGENT_NONE
-            ne[ny][nx] = 0.0
-            nid[ny][nx] = 0
-            nacc[ny][nx] = 0.0
-            nk[cy][cx] = AGENT_NONE
-            ne[cy][cx] = 0.0
-            nid[cy][cx] = 0
-            nacc[cy][cx] = 0.0
-            nk[ny][nx] = AGENT_HUNTER
-            ne[ny][nx] = e + meal - self.cfg.move_cost
-            nid[ny][nx] = uid
-            nacc[ny][nx] = rem
-            return True, nx, ny
-        if nk[ny][nx] == AGENT_HUNTER and nid[ny][nx] != uid:
-            return False, cx, cy
+            atk_h_n = self._trait_norm_at(ATTACK, cx, cy)
+            atk_p_n = self._trait_norm_at(ATTACK, nx, ny)
+            arm_h_n = self._trait_norm_at(ARMOR, cx, cy)
+            arm_p_n = self._trait_norm_at(ARMOR, nx, ny)
+            hunter_kills = atk_h_n > arm_p_n
+            prey_kills = atk_p_n > arm_h_n
+
+            if hunter_kills and prey_kills:
+                self._clear_cell(nk, ne, nid, nacc, cx, cy)
+                self._clear_cell(nk, ne, nid, nacc, nx, ny)
+                return "both_dead", cx, cy
+
+            if prey_kills and not hunter_kills:
+                self._clear_cell(nk, ne, nid, nacc, cx, cy)
+                return "hunter_died", cx, cy
+
+            if hunter_kills and not prey_kills:
+                meal = 28.0 + 0.4 * ne[ny][nx]
+                hunter_traits = tuple(self.traits[k][cy][cx] for k in range(TRAIT_COUNT))
+                self._clear_cell(nk, ne, nid, nacc, ny, nx)
+                self._clear_cell(nk, ne, nid, nacc, cx, cy)
+
+                nk[ny][nx] = AGENT_HUNTER
+                new_e = e - cost + meal
+                cap = self._stamina_cap_at(nx, ny)
+                ne[ny][nx] = min(cap, new_e)
+                nid[ny][nx] = uid
+                nacc[ny][nx] = rem
+                for k in range(TRAIT_COUNT):
+                    self.traits[k][ny][nx] = hunter_traits[k]
+
+                self.agent_facing[ny][nx] = facing_index(dx, dy)
+                self.agent_last_dx[ny][nx], self.agent_last_dy[ny][nx] = dx, dy
+
+                c = self.cfg
+                if self.rng.random() < c.p_hunter_breed_on_kill:
+                    opts: list[tuple[int, int]] = []
+                    for ddx, ddy in DIRS:
+                        tx, ty = wrap_xy(nx + ddx, ny + ddy, w, h)
+                        if nk[ty][tx] == AGENT_NONE:
+                            opts.append((tx, ty))
+                    if opts:
+                        bx, by = self.rng.choice(opts)
+                        parent = read_genome_from_grids(self.traits, nx, ny)
+                        child_g = self._offspring_genome(parent, AGENT_HUNTER)
+                        nk[by][bx] = AGENT_HUNTER
+                        nid[by][bx] = self._alloc_uid()
+                        nacc[by][bx] = 0.0
+                        copy_traits_to_grid(self.traits, bx, by, child_g)
+                        ne[by][bx] = self._stamina_cap_at(bx, by)
+                        self.agent_age[by][bx] = 0
+                        self.agent_facing[by][bx] = self.rng.randrange(4)
+                        self.agent_last_dx[by][bx] = 0
+                        self.agent_last_dy[by][bx] = 0
+
+                return "ate", nx, ny
+
+            ne[cy][cx] = max(0.0, e - cost - self.cfg.failed_hunt_extra_cost)
+            nacc[cy][cx] = rem
+            if ne[cy][cx] <= 0:
+                self._clear_cell(nk, ne, nid, nacc, cx, cy)
+                return "failed_hunt", cx, cy
+            return "failed_hunt", cx, cy
+
+        if nk[ny][nx] == AGENT_HUNTER:
+            return "blocked", cx, cy
         if nk[ny][nx] != AGENT_NONE:
-            return False, cx, cy
-        new_e = e - self.cfg.move_cost
+            return "blocked", cx, cy
+
+        new_e = e - cost
+        saved = tuple(self.traits[k][cy][cx] for k in range(TRAIT_COUNT))
         nk[cy][cx] = AGENT_NONE
         ne[cy][cx] = 0.0
         nid[cy][cx] = 0
         nacc[cy][cx] = 0.0
+        for k in range(TRAIT_COUNT):
+            self.traits[k][cy][cx] = 0.0
+        self.agent_age[cy][cx] = 0
+
         nk[ny][nx] = AGENT_HUNTER
         ne[ny][nx] = new_e
         nid[ny][nx] = uid
         nacc[ny][nx] = rem
-        return True, nx, ny
+        for k in range(TRAIT_COUNT):
+            self.traits[k][ny][nx] = saved[k]
+
+        self.agent_facing[ny][nx] = facing_index(dx, dy)
+        self.agent_last_dx[ny][nx], self.agent_last_dy[ny][nx] = dx, dy
+        cap_s = self._stamina_cap_at(nx, ny)
+        if ne[ny][nx] > cap_s:
+            ne[ny][nx] = cap_s
+        return "moved", nx, ny
 
     def _prey_phase(self) -> None:
         c = self.cfg
         w, h = c.width, c.height
-        sp = _copy_f(self.plants)
-        sce, sca = _copy_f(self.carrion_energy), _copy_i(self.carrion_age)
         sk = _copy_i(self.agent_kind)
         ssid = _copy_i(self.agent_id)
 
-        np_ = _copy_f(sp)
-        nce, nca = _copy_f(sce), _copy_i(sca)
         nk = _copy_i(sk)
-        ne = _copy_f(self.agent_energy)
+        ne = _copy_f(self.agent_stamina)
         nid = _copy_i(self.agent_id)
         nacc = _copy_f(self.agent_move_acc)
 
@@ -486,39 +484,39 @@ class World:
             sid = ssid[y][x]
             if nk[y][x] != AGENT_PREY or nid[y][x] != sid:
                 continue
-            e = ne[y][x] - c.idle_cost_prey
-            if e <= 0:
-                nk[y][x] = AGENT_NONE
-                ne[y][x] = 0.0
-                nid[y][x] = 0
-                nacc[y][x] = 0.0
-                self._deposit_carrion(nce, nca, x, y, self._carrion_drop(AGENT_PREY, e))
+
+            self.agent_age[y][x] += 1
+            if self.agent_age[y][x] > c.prey_max_age:
+                self._clear_cell(nk, ne, nid, nacc, x, y)
                 continue
+
+            cap = self._stamina_cap_at(x, y)
+            e = min(cap, ne[y][x] + self._stamina_regen_at(x, y))
+            e -= c.idle_cost_prey
+            if e < 1.0:
+                e = 1.0
             ne[y][x] = e
 
             cx, cy = x, y
             uid = sid
-            nacc[cy][cx] += c.prey_move_stride
+            nacc[cy][cx] += self._stride_at(cx, cy)
             sub = 0
             while nacc[cy][cx] >= 1.0 - 1e-12 and sub < c.max_submoves_per_tick:
                 sub += 1
                 if nk[cy][cx] != AGENT_PREY or nid[cy][cx] != uid:
                     break
-                vr = c.prey_vision_radius
-                threat = self._nearest_agent_cell(sk, cx, cy, vr, AGENT_HUNTER)
+                fac_idx = self.agent_facing[cy][cx]
+                threat = nearest_visible_agent(
+                    cx, cy, fac_idx, sk, w, h, c, self.traits, AGENT_HUNTER
+                )
                 dx, dy = 0, 0
                 if threat is not None:
                     hx, hy = threat
-                    flee = self._best_flee_dir_dynamic(nk, nid, cx, cy, hx, hy, uid)
+                    flee = self._best_flee_dir(nk, nid, cx, cy, hx, hy, uid)
                     if flee is not None:
                         dx, dy = flee
                 if dx == 0 and dy == 0:
-                    tgt = self._nearest_plant_cell(sp, cx, cy, vr)
-                    if tgt is not None:
-                        tx, ty = tgt
-                        dx, dy = self._step_toward(cx, cy, tx, ty)
-                if dx == 0 and dy == 0:
-                    rd = self._random_valid_dir_dynamic(nk, nid, cx, cy, uid)
+                    rd = self._random_valid_dir_prey(nk, nid, cx, cy, uid)
                     if rd is not None:
                         dx, dy = rd
                 if dx == 0 and dy == 0:
@@ -527,56 +525,27 @@ class World:
                 if not ok:
                     break
 
-            if nk[cy][cx] == AGENT_PREY and np_[cy][cx] > 0:
-                ne[cy][cx] += np_[cy][cx]
-                np_[cy][cx] = 0.0
+            if nk[cy][cx] == AGENT_PREY and nid[cy][cx] == uid:
+                self._try_prey_breed(nk, ne, nid, nacc, cx, cy)
 
-            if nk[cy][cx] != AGENT_PREY:
-                continue
-            e = ne[cy][cx]
-            if e <= 0:
-                nk[cy][cx] = AGENT_NONE
-                ne[cy][cx] = 0.0
-                nid[cy][cx] = 0
-                nacc[cy][cx] = 0.0
-                self._deposit_carrion(nce, nca, cx, cy, self._carrion_drop(AGENT_PREY, e))
-                continue
+            if nk[cy][cx] == AGENT_PREY:
+                cap = self._stamina_cap_at(cx, cy)
+                if ne[cy][cx] > cap:
+                    ne[cy][cx] = cap
 
-            if e >= c.prey_breed_threshold:
-                opts = []
-                for ddx, ddy in DIRS_4:
-                    tx, ty = cx + ddx, cy + ddy
-                    if self._in_bounds(tx, ty) and nk[ty][tx] == AGENT_NONE:
-                        opts.append((tx, ty))
-                if opts:
-                    tx, ty = self.rng.choice(opts)
-                    nk[ty][tx] = AGENT_PREY
-                    ne[ty][tx] = c.prey_start_energy
-                    nid[ty][tx] = self._alloc_uid()
-                    nacc[ty][tx] = 0.0
-                    ne[cy][cx] = e - c.prey_breed_cost
-
-            e = ne[cy][cx]
-            if nk[cy][cx] == AGENT_PREY and e <= 0:
-                nk[cy][cx] = AGENT_NONE
-                ne[cy][cx] = 0.0
-                nid[cy][cx] = 0
-                nacc[cy][cx] = 0.0
-                self._deposit_carrion(nce, nca, cx, cy, self._carrion_drop(AGENT_PREY, e))
-
-        self.plants, self.carrion_energy, self.carrion_age = np_, nce, nca
-        self.agent_kind, self.agent_energy, self.agent_id = nk, ne, nid
+        self.agent_kind = nk
+        self.agent_stamina = ne
+        self.agent_id = nid
         self.agent_move_acc = nacc
 
     def _hunter_phase(self) -> None:
         c = self.cfg
         w, h = c.width, c.height
-        sce, sca = _copy_f(self.carrion_energy), _copy_i(self.carrion_age)
-        sk, se = _copy_i(self.agent_kind), _copy_f(self.agent_energy)
+        sk = _copy_i(self.agent_kind)
         ssid = _copy_i(self.agent_id)
 
-        np_, nce, nca = _copy_f(self.plants), _copy_f(sce), _copy_i(sca)
-        nk, ne = _copy_i(sk), _copy_f(se)
+        nk = _copy_i(sk)
+        ne = _copy_f(self.agent_stamina)
         nid = _copy_i(self.agent_id)
         nacc = _copy_f(self.agent_move_acc)
 
@@ -587,89 +556,134 @@ class World:
             sid = ssid[y][x]
             if nk[y][x] != AGENT_HUNTER or nid[y][x] != sid:
                 continue
+
             e = ne[y][x] - c.idle_cost_hunter
-            if e <= 0:
-                nk[y][x] = AGENT_NONE
-                ne[y][x] = 0.0
-                nid[y][x] = 0
-                nacc[y][x] = 0.0
-                self._deposit_carrion(nce, nca, x, y, self._carrion_drop(AGENT_HUNTER, e))
+            ne[y][x] = e
+            if ne[y][x] <= 0:
+                self._clear_cell(nk, ne, nid, nacc, x, y)
                 continue
 
-            ne[y][x] = e
+            cap = self._stamina_cap_at(x, y)
+            ne[y][x] = min(cap, ne[y][x] + self._stamina_regen_at(x, y))
+
             hx, hy = x, y
             uid = sid
-            nacc[hy][hx] += c.hunter_move_stride
+            nacc[hy][hx] += self._stride_at(hx, hy)
             sub = 0
             while nacc[hy][hx] >= 1.0 - 1e-12 and sub < c.max_submoves_per_tick:
                 sub += 1
                 if nk[hy][hx] != AGENT_HUNTER or nid[hy][hx] != uid:
                     break
-                vr = c.hunter_vision_radius
-                prey_cell = self._nearest_agent_cell(nk, hx, hy, vr, AGENT_PREY)
+                fac_idx = self.agent_facing[hy][hx]
+                prey_cell = nearest_visible_agent(
+                    hx, hy, fac_idx, sk, w, h, c, self.traits, AGENT_PREY
+                )
                 dx, dy = 0, 0
                 if prey_cell is not None:
                     px, py = prey_cell
                     dx, dy = self._step_toward(hx, hy, px, py)
                 if dx == 0 and dy == 0:
-                    cc = self._nearest_carrion_cell(nce, hx, hy, vr)
-                    if cc is not None:
-                        cx, cy = cc
-                        dx, dy = self._step_toward(hx, hy, cx, cy)
-                if dx == 0 and dy == 0:
-                    rd = self._random_valid_hunter_dynamic(nk, nid, hx, hy, uid)
+                    rd = self._random_valid_dir_hunter_empty(nk, hx, hy)
                     if rd is not None:
                         dx, dy = rd
                 if dx == 0 and dy == 0:
                     break
-                ok, hx, hy = self._hunter_substep(nk, ne, nid, nacc, hx, hy, dx, dy, uid)
-                if not ok:
+                res, hx, hy = self._hunter_substep(nk, ne, nid, nacc, hx, hy, dx, dy, uid)
+                if res in ("blocked", "failed_hunt", "hunter_died", "both_dead"):
                     break
 
-            if nk[hy][hx] == AGENT_HUNTER and nce[hy][hx] > 0:
-                ne[hy][hx] += nce[hy][hx] * 0.95
-                nce[hy][hx] = 0.0
-                nca[hy][hx] = 0
+            if nk[hy][hx] == AGENT_HUNTER:
+                cap = self._stamina_cap_at(hx, hy)
+                if ne[hy][hx] > cap:
+                    ne[hy][hx] = cap
+                if ne[hy][hx] <= 0:
+                    self._clear_cell(nk, ne, nid, nacc, hx, hy)
 
-            if nk[hy][hx] != AGENT_HUNTER:
-                continue
-            e = ne[hy][hx]
-            if e <= 0:
-                nk[hy][hx] = AGENT_NONE
-                ne[hy][hx] = 0.0
-                nid[hy][hx] = 0
-                nacc[hy][hx] = 0.0
-                self._deposit_carrion(nce, nca, hx, hy, self._carrion_drop(AGENT_HUNTER, e))
-                continue
-
-            if e >= c.hunter_breed_threshold:
-                opts = []
-                for ddx, ddy in DIRS_4:
-                    tx, ty = hx + ddx, hy + ddy
-                    if self._in_bounds(tx, ty) and nk[ty][tx] == AGENT_NONE:
-                        opts.append((tx, ty))
-                if opts:
-                    tx, ty = self.rng.choice(opts)
-                    nk[ty][tx] = AGENT_HUNTER
-                    ne[ty][tx] = c.hunter_start_energy
-                    nid[ty][tx] = self._alloc_uid()
-                    nacc[ty][tx] = 0.0
-                    ne[hy][hx] = e - c.hunter_breed_cost
-
-            e = ne[hy][hx]
-            if nk[hy][hx] == AGENT_HUNTER and e <= 0:
-                nk[hy][hx] = AGENT_NONE
-                ne[hy][hx] = 0.0
-                nid[hy][hx] = 0
-                nacc[hy][hx] = 0.0
-                self._deposit_carrion(nce, nca, hx, hy, self._carrion_drop(AGENT_HUNTER, e))
-
-        self.plants, self.carrion_energy, self.carrion_age = np_, nce, nca
-        self.agent_kind, self.agent_energy, self.agent_id = nk, ne, nid
+        self.agent_kind = nk
+        self.agent_stamina = ne
+        self.agent_id = nid
         self.agent_move_acc = nacc
 
+    def _mean_genome_k_nearest(
+        self, x: int, y: int, k: int, species: int
+    ) -> Genome | None:
+        """Arithmetic mean of traits over `k` nearest agents of `species` (torus Manhattan, d>0)."""
+        c = self.cfg
+        w, h = c.width, c.height
+        cand: list[tuple[int, int, int]] = []
+        for ty in range(h):
+            for tx in range(w):
+                if self.agent_kind[ty][tx] != species:
+                    continue
+                d = torus_manhattan(x, y, tx, ty, w, h)
+                if d == 0:
+                    continue
+                cand.append((d, tx, ty))
+        if not cand:
+            return None
+        cand.sort(key=lambda t: t[0])
+        take = cand[: min(k, len(cand))]
+        acc = [0.0] * TRAIT_COUNT
+        for _, tx, ty in take:
+            for i in range(TRAIT_COUNT):
+                acc[i] += float(self.traits[i][ty][tx])
+        n = len(take)
+        bounds = c.trait_bounds
+        out: list[float] = []
+        for i in range(TRAIT_COUNT):
+            v = acc[i] / n
+            lo, hi = bounds[i]
+            out.append(max(lo, min(hi, v)))
+        return Genome(traits=tuple(out))
+
+    def _spontaneous_prey_spawn(self) -> None:
+        c = self.cfg
+        w, h = c.width, c.height
+        g0 = self._center_genome()
+        k = max(1, c.prey_spawn_neighbor_count)
+        for y in range(h):
+            for x in range(w):
+                if self.agent_kind[y][x] != AGENT_NONE:
+                    continue
+                if self.rng.random() >= c.p_prey_spawn_empty:
+                    continue
+                uid = self._alloc_uid()
+                local = self._mean_genome_k_nearest(x, y, k, AGENT_PREY)
+                base = local if local is not None else g0
+                child = self._offspring_genome(base, AGENT_PREY)
+                self.agent_kind[y][x] = AGENT_PREY
+                self.agent_id[y][x] = uid
+                self.agent_move_acc[y][x] = 0.0
+                copy_traits_to_grid(self.traits, x, y, child)
+                self.agent_stamina[y][x] = self._stamina_cap_at(x, y)
+                self.agent_age[y][x] = 0
+                self.agent_facing[y][x] = self.rng.randrange(4)
+                self.agent_last_dx[y][x] = 0
+                self.agent_last_dy[y][x] = 0
+
+    def _spontaneous_hunter_spawn(self) -> None:
+        c = self.cfg
+        w, h = c.width, c.height
+        for y in range(h):
+            for x in range(w):
+                if self.agent_kind[y][x] != AGENT_NONE:
+                    continue
+                if self.rng.random() >= c.p_hunter_spawn_empty:
+                    continue
+                uid = self._alloc_uid()
+                child = self._genome_for_new_hunter_at(x, y)
+                self.agent_kind[y][x] = AGENT_HUNTER
+                self.agent_id[y][x] = uid
+                self.agent_move_acc[y][x] = 0.0
+                copy_traits_to_grid(self.traits, x, y, child)
+                self.agent_stamina[y][x] = self._stamina_cap_at(x, y)
+                self.agent_age[y][x] = 0
+                self.agent_facing[y][x] = self.rng.randrange(4)
+                self.agent_last_dx[y][x] = 0
+                self.agent_last_dy[y][x] = 0
+
     def count_plants(self) -> int:
-        return sum(1 for row in self.plants for v in row if v > 0)
+        return 0
 
     def count_prey(self) -> int:
         return sum(1 for row in self.agent_kind for v in row if v == AGENT_PREY)
@@ -677,21 +691,45 @@ class World:
     def count_hunters(self) -> int:
         return sum(1 for row in self.agent_kind for v in row if v == AGENT_HUNTER)
 
+    def mean_trait_prey(self, trait_idx: int) -> float:
+        s = 0.0
+        n = 0
+        for y in range(self.cfg.height):
+            for x in range(self.cfg.width):
+                if self.agent_kind[y][x] == AGENT_PREY:
+                    s += float(self.traits[trait_idx][y][x])
+                    n += 1
+        return s / n if n else 0.0
+
+    def mean_trait_hunter(self, trait_idx: int) -> float:
+        s = 0.0
+        n = 0
+        for y in range(self.cfg.height):
+            for x in range(self.cfg.width):
+                if self.agent_kind[y][x] == AGENT_HUNTER:
+                    s += float(self.traits[trait_idx][y][x])
+                    n += 1
+        return s / n if n else 0.0
+
     def _record_history_snapshot(self) -> None:
         self.history_t.append(self.step_index)
-        self.history_plants.append(self.count_plants())
+        self.history_plants.append(0)
         self.history_prey.append(self.count_prey())
         self.history_hunters.append(self.count_hunters())
+        self.history_prey_mean_traits.append([self.mean_trait_prey(i) for i in range(TRAIT_COUNT)])
+        self.history_hunter_mean_traits.append([self.mean_trait_hunter(i) for i in range(TRAIT_COUNT)])
+        phase_step = 0 if self.step_index == 0 else self.step_index - 1
+        self.history_mutation_prey.append(
+            1 if self._mutation_phase_allows_at_step(AGENT_PREY, phase_step) else 0
+        )
+        self.history_mutation_hunter.append(
+            1 if self._mutation_phase_allows_at_step(AGENT_HUNTER, phase_step) else 0
+        )
 
     def step(self) -> None:
-        if self._effective_env_workers() <= 1:
-            self._grow_plants()
-            self._decay_carrion()
-        else:
-            self._parallel_env_step()
-
         self._prey_phase()
         self._hunter_phase()
-
+        self._spontaneous_prey_spawn()
+        self._spontaneous_hunter_spawn()
         self.step_index += 1
         self._record_history_snapshot()

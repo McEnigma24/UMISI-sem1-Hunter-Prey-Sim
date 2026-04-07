@@ -25,20 +25,11 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Fixed window size in pixels (default: sized to fit grid on current display)",
     )
-    p.add_argument(
-        "--parallel-env-threads",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Parallel env step: 1=off, 0=auto (CPU), N=worker count (see SimConfig.parallel_env_threads)",
-    )
     args = p.parse_args(argv)
 
     cfg = SimConfig(width=args.width, height=args.height)
     if args.seed is not None:
         cfg.rng_seed = args.seed
-    if args.parallel_env_threads is not None:
-        cfg.parallel_env_threads = args.parallel_env_threads
 
     win = (args.window[0], args.window[1]) if args.window is not None else None
     run_pygame(

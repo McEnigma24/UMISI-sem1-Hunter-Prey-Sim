@@ -3,17 +3,22 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("TkAgg")
+
 import pygame
 
 from sim.config import SimConfig
 from sim.entities import AGENT_HUNTER, AGENT_PREY
+from sim.genome import VISION_RANGE
 from sim.world import World
-from visual.plots import save_history_csv, show_population_plot
+from visual.plots import LiveCharts, save_history_csv, show_population_plot
 
 DELAY_PRESETS = (0.0, 0.02, 0.05, 0.1, 0.2, 0.35, 0.6)
 
 # Layout: HUD text at top; grid uses the rest
-_HUD_LINES_PX = 52
+_HUD_LINES_PX = 72
 _PAD = 14
 _MIN_CELL_PX = 2
 _MAX_CELL_PX = 28
@@ -48,6 +53,14 @@ def run_pygame(
 ) -> None:
     cfg = cfg or SimConfig()
     world = World(cfg)
+
+    live_charts: LiveCharts | None = None
+    try:
+        live_charts = LiveCharts()
+    except Exception:
+        live_charts = None
+
+    last_live_update = 0.0
 
     pygame.init()
     info = pygame.display.Info()
@@ -93,26 +106,16 @@ def run_pygame(
         return cell, ox, oy
 
     def draw_world() -> None:
+        nonlocal last_live_update
         screen.fill((24, 24, 28))
         cell, ox, oy = cell_pixel_size()
         gw, gh = cfg.width, cfg.height
-        max_c = max(1.0, cfg.plant_energy_value * 2)
+        lo, hi = cfg.trait_bounds[VISION_RANGE]
 
         for y in range(gh):
             for x in range(gw):
                 rect = pygame.Rect(ox + x * cell, oy + y * cell, cell, cell)
-                p = world.plants[y][x]
-                c_e = world.carrion_energy[y][x]
-                base_r, base_g, base_b = 32, 32, 36
-                if p > 0:
-                    g = min(255, int(80 + 175 * (p / max_c)))
-                    base_r, base_g, base_b = 20, g, 40
-                if c_e > 0:
-                    br = min(255, int(60 + 120 * min(1.0, c_e / 80.0)))
-                    base_r = min(255, base_r + br // 2)
-                    base_g = max(0, base_g - 25)
-                    base_b = max(0, base_b - 15)
-                pygame.draw.rect(screen, (base_r, base_g, base_b), rect)
+                pygame.draw.rect(screen, (32, 32, 38), rect)
 
         for y in range(gh):
             for x in range(gw):
@@ -120,7 +123,12 @@ def run_pygame(
                 if k == 0:
                     continue
                 rect = pygame.Rect(ox + x * cell, oy + y * cell, cell, cell)
-                col = (120, 160, 255) if k == AGENT_PREY else (255, 90, 90)
+                vr = world.traits[VISION_RANGE][y][x]
+                t = (vr - lo) / max(1e-6, float(hi - lo))
+                if k == AGENT_PREY:
+                    col = (int(80 + 100 * t), int(140 + 80 * (1 - t)), 255)
+                else:
+                    col = (255, int(60 + 120 * (1 - t)), int(60 + 80 * t))
                 inset = max(1, cell // 6)
                 pygame.draw.rect(
                     screen,
@@ -134,14 +142,22 @@ def run_pygame(
                 rect = pygame.Rect(ox + x * cell, oy + y * cell, cell, cell)
                 pygame.draw.rect(screen, (50, 50, 55), rect, 1)
 
+        pmv = world.mean_trait_prey(VISION_RANGE) if world.count_prey() else 0.0
+        hmv = world.mean_trait_hunter(VISION_RANGE) if world.count_hunters() else 0.0
         hud = (
-            f"SPACE pause | +/- delay | [/] spf | P plot | S save CSV | R reset | Q quit\n"
-            f"plants={world.count_plants()} prey={world.count_prey()} hunters={world.count_hunters()}"
+            f"SPACE pause | +/- delay | [/] spf | P snapshot plot | S save CSV | R reset | Q quit\n"
+            f"prey={world.count_prey()} hunters={world.count_hunters()} | live charts in Matplotlib window | vision μ: {pmv:.2f} / {hmv:.2f}"
         )
         for i, line in enumerate(hud.split("\n")):
             surf = font.render(line, True, (220, 220, 220))
             screen.blit(surf, (_PAD, 8 + i * 20))
         pygame.display.flip()
+
+        if live_charts is not None:
+            now = time.monotonic()
+            if now - last_live_update >= 0.12:
+                live_charts.update(world)
+                last_live_update = now
 
     update_caption()
     draw_world()
@@ -198,4 +214,6 @@ def run_pygame(
 
         clock.tick(60)
 
+    if live_charts is not None:
+        live_charts.close()
     pygame.quit()
