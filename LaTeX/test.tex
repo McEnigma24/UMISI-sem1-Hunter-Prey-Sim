@@ -6,6 +6,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}
 \usepackage{booktabs}
+\usepackage{adjustbox}
 \usepackage{url}
 \usepackage{hyperref}
 
@@ -16,25 +17,168 @@
   citecolor=blue
 }
 
-\title{Symulacja drapieżnik--ofiara z uczeniem ze wzmocnieniem\\(implementacja wg Park et al., 2021)}
-\author{---}
+\title{Koewolucja w systemach drapieżnik-ofiara}
+\author{Wojciech Maćkowiak}
 \date{\today}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-\textit{[Streszczenie całej pracy --- do uzupełnienia po napisaniu wstępu i części porównawczej.]}
+Praca dotyczy eksploracji symulacji agentowych, w których można obserwować \emph{koewolucję} --- wzajemną adaptację zachowań populacji drapieżników i ofiar osadzonych we wspólnym środowisku.
+Badane było, czy w bogatszych modelach (więcej gatunków i mechanik, rozbudowane parametry agentów oraz ewolucja genetyczna) pojawiają się równie wyraźne i łatwe do interpretacji wzorce, jak w uproszczonych ustawieniach opisywanych w literaturze.
+Wiele prac sugeruje, że czytelna koewolucja wymaga silnego ograniczenia złożoności: przykładem jest artykuł Georgiev, Tanev i Shimohary~\cite{georgiev2019}, w którym prości drapieżnicy z pojedynczym sensorem pola widzenia i algorytm genetyczny prowadzą do współewolucji uproszczonej morfologii czujnika oraz zachowania polowania.
+W projekcie zrealizowano dwa wcześniejsze prototypy (łańcuch troficzny z energią; system polowania/ucieczki z wieloma cechami i GA), a następnie odtworzono model Park et al.~\cite{park2021} z uczeniem ze wzmocnieniem na dyskretnej siatce.
+Ostatecznie to ostatnie, ściśle zdefiniowane środowisko okazało się najwygodniejsze do stabilnej obserwacji interakcji w duchu koewolucji, podczas gdy bardziej rozbudowane symulacje dawały mniej przejrzysty obraz dynamiki.
 \end{abstract}
 
 % --------------------------------------------------------------------------
-\section{Inne podejścia do problemu}
+\section{Początkowe podejścia do problemu}
 \label{sec:inne-podejscia}
 
-\textit{[Tu: opis wcześniejszych lub alternatywnych podejść do modelowania dynamiki drapieżnik--ofiara --- literatura, prostsze modele, inne metody RL itp. Fragment do uzupełnienia.]}
+Zanim odtworzono środowisko z pracy Park et al.~\cite{park2021}, eksperymentowano z własnymi modelami o rosnącej złożoności.
+Pierwszy kładł nacisk na prosty łańcuch troficzny i zasoby energetyczne; drugi redukował pełny ekosystem do walki polowanie--ucieczka z ewolucją genetyczną wielu cech.
+Oba podejścia dostarczyły cennych obserwacji przestrzennych i populacyjnych, lecz analiza koewolucji była trudniejsza niż w uproszczonym modelu MARL opisanym w sekcji~\ref{sec:park}.
 
-\subsection*{Szkic podsekcji (opcjonalnie)}
-\textit{[Do uzupełnienia.]}
+\subsection{Pierwsze podejście: drapieżnik, ofiara, roślina}
+
+Modele trzech poziomów: \textbf{drapieżnik} poluje na \textbf{ofiare}, ofiara żeruje na \textbf{roślinach}.
+Świat jest dwuwymiarową siatką; agenci poruszają się w osiem sąsiadów Moore'a (także po przekątnych) lub pozostają na miejscu, w zależności od implementacji interfejsu.
+
+\textbf{Energia i śmierć.} Każdy ruch zużywa energię; przy zerowej energii jednostka ginie.
+
+\textbf{Diety.} Drapieżnik uzupełnia energię po zjedzeniu ofiary oraz z \emph{padliny} --- pozostałości po dużej padlinie zmarłego organizmu, której wartość odżywcza z czasem maleje.
+Ofiara pobiera energię wyłącznie z roślin.
+
+\textbf{Rośliny i populacja.} Rośliny pojawiają się spontanicznie, z większym prawdopodobieństwem przy sąsiedztwie już istniejących.
+Drapieżniki \emph{nie} pojawiają się losowo w polu --- zmienia się wyłącznie ich liczebność przez rozmnażanie i śmierć.
+Nowe ofiary pojawiają się bardzo rzadko i losowo.
+
+\textbf{Rozmnażanie.} Ofiara rozmnaża się po spożyciu rośliny i przekroczeniu progu energii.
+Drapieżnik --- po zjedzeniu ofiary lub padliny i przekroczeniu progu.
+
+\textbf{Ewolucja.} Brak ewolucji i indywidualnych parametrów: jednostki są statyczne pod względem cech.
+
+\textbf{Obserwacje.} Liczebności gatunków oscylują; przy zbyt dużej fluktuacji jedna z populacji wymiera i symulacja się kończy.
+Na mapie z czasem formują się \emph{fale}: na czołówce ofiary wchodzą w obszary z roślinami, tuż za nimi podążają drapieżniki.
+Na mapie z \emph{torusem} (zawijanie krawędzi) fale mogą się utrzymywać i współistnieć ze stabilniejszymi średnimi liczebnościami.
+Przy \emph{ścianach} ofiary mogą zostać zepchnięte do krawędzi i otoczone przez drapieżniki, co prowadzi do wymarcia ofiar, a następnie głodu drapieżników.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Skrót zasad pierwszego systemu (drapieżnik--ofiara--roślina).}
+  \label{tab:sys1}
+  \footnotesize
+  \begin{adjustbox}{max width=\linewidth}
+  \begin{tabular}{@{}p{1.6cm}p{1.4cm}p{4.8cm}p{2.5cm}p{1.7cm}@{}}
+    \toprule
+    Pole & Ruch & Zasady & Rozmnażanie & Param.\ / ewo\-lucja \\
+    \midrule
+    Siatka 2D & 8 kier.\ (+ ewent.\ bez ruchu) & Energia: ruch kosztuje; 0 = śmierć. Diety i padlina jak wyżej. Rośliny: spawn + sąsiedztwo. Drapieżniki bez losowego dosiewu; ofiary rzadko losowo. & Progi po roślinie / ofierze lub padlinie & Brak \\
+    \bottomrule
+  \end{tabular}
+  \end{adjustbox}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.95\textwidth]{system_1/1___population_cycles.png}
+  \caption{Pierwszy system: przykładowe oscylacje liczebności roślin, ofiar i drapieżników w czasie.}
+  \label{fig:sys1-pop}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.95\textwidth]{system_1/2___fale.png}
+  \caption{Pierwszy system: widoczne fale przestrzenne (ofiara przed drapieżnikiem w pasach zajętości siatki).}
+  \label{fig:sys1-fale}
+\end{figure}
+
+\subsection{Drugie podejście: polowanie, parametry i algorytm genetyczny}
+
+Drugi prototyp redukuje scenariusz do konfrontacji drapieżnik--ofiara bez pełnego łańcucha troficznego roślina--ofiara, kładąc nacisk na wiele cech osobnika i ewolucję.
+
+\textbf{Pole i ruch.} Siatka 2D; ruch w kierunkach również przekątnych.
+
+\textbf{Życie i śmierć.} Drapieżniki giną z głodu. Ofiary giną po schwyceniu lub ze starości.
+
+\textbf{Koewolucja ``w stylu kamień--papier--nożyce''.} Agenci rozwijają cechy pod polowanie lub ucieczkę; jedna strona eksploatuje lukę w zachowaniu przeciwnika, dopóki druga nie ,,kontruje'' modyfikacją parametrów --- strategie i nisze zmieniają się w czasie.
+
+\textbf{Stamina.} Jednostki mają staminę odbudowywaną samoistnie (regeneracja w czasie).
+
+\textbf{Rozmnażanie.} Ofiary mogą rozmnażać się spontanicznie; drapieżniki po zjedzeniu ofiary.
+
+\textbf{Parametry agenta (przykłady):}
+\begin{itemize}\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}
+  \item \texttt{vision\_range}, \texttt{vision\_focus};
+  \item \texttt{speed}, \texttt{agility};
+  \item \texttt{attack}, \texttt{armor};
+  \item \texttt{stamina\_max}, \texttt{stamina\_regen}.
+\end{itemize}
+
+\textbf{Ewolucja.} Algorytm genetyczny: potomek to kopia rodzica z mutacją jednej lub wielu cech.
+
+\textbf{Modyfikacje eksperymentalne:}
+\begin{itemize}
+  \item czasowa blokada ewolucji wybranych agentów na \(n\) iteracji;
+  \item mutacja zbalansowana (wzmacnianie jednej cechy i osłabienie drugiej);
+  \item mutacja losowa pojedynczej cechy;
+  \item predefiniowane ścieżki rozwoju (ustalone kompromisy między cechami);
+  \item pojawianie się nowych jednostek na podstawie średniej parametrów \(N\) najbliższych sąsiadów.
+\end{itemize}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Skrót zasad drugiego systemu (polowanie--ucieczka + GA).}
+  \label{tab:sys2}
+  \footnotesize
+  \begin{adjustbox}{max width=\linewidth}
+  \begin{tabular}{@{}p{1.6cm}p{1.4cm}p{4.6cm}p{2.4cm}p{2.0cm}@{}}
+    \toprule
+    Pole & Ruch & Zasady & Rozmnażanie & Param.\ / ewo\-lucja \\
+    \midrule
+    Siatka 2D & 8 kier.\ (+ przekątne) & Głód drapieżników; ofiary: schwycenie lub wiek. Koewolucja cech (RPS); stamina + regen. & Ofiary spontanicznie; drapieżniki po ofierze & Wieloczynnikowy genotyp; GA \\
+    \bottomrule
+  \end{tabular}
+  \end{adjustbox}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.95\textwidth]{system_2/1___prey_brak_ewolucji.png}
+  \caption{Drugi system: przykład przebiegu przy braku ewolucji ofiar (scenariusz referencyjny).}
+  \label{fig:sys2-1}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.95\textwidth]{system_2/2___prey_ewolucja_potem_wygaśnięcie_specjalicaji_i_brak_nowych_cech.png}
+  \caption{Drugi system: ewolucja ofiar, wygaszenie specjalizacji i brak nowych cech.}
+  \label{fig:sys2-2}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.95\textwidth]{system_2/3___brak_cykli_widoczna_ewolucja_w_obydwu_grupach_małe_zmiany_strategii.png}
+  \caption{Drugi system: brak wyraźnych cykli przy ewolucji obu stron i małych zmianach strategii.}
+  \label{fig:sys2-3}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.95\textwidth]{system_2/4___cykle_w_populacji_mutacja_tylko_jednej_grupy_na_raz_wszystkie_idą_w_rozwój_tylko_w_jednej_cechy.png}
+  \caption{Drugi system: cykle populacji przy mutacji naprzemiennie tylko jednej grupy --- rozwój skoncentrowany w jednej cesze.}
+  \label{fig:sys2-4}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.95\textwidth]{system_2/5___lekkie_cykle_znowu_ewolucja_tylko_jednej_cechy_dłuższe_okresy_periodycznej_mutacji.png}
+  \caption{Drugi system: łagodniejsze cykle przy dłuższych okresach periodycznej mutacji jednej grupy.}
+  \label{fig:sys2-5}
+\end{figure}
+
+Powyższe eksperymenty zilustrowały, że bogatszy opis biologiczny i wielowymiarowy genotyp utrudniają wyciąganie prostych wniosków o koewolucji w porównaniu z modelem z sekcji~\ref{sec:park}.
 
 % --------------------------------------------------------------------------
 \section{Implementacja według Park et al.\ (2021)}
@@ -162,12 +306,17 @@ Na rys.~\ref{fig:fig3} widać, że po uczeniu przebiegi bywają stabilniejsze lu
   \item Ograniczenia repozytorium względem pełnej pracy~\cite{park2021}: brak gotowej reprodukcji wszystkich rysunków jakościowych (np.\ trajektorie przestrzenne jak Fig.~6--7), deterministyczna kolejność ruchów agentów oraz domyślna liczba zewnętrznych iteracji (30) ustawiona pod wygodę eksperymentu, a nie identycznie z opisem ,,kilkudziesięciu'' iteracji w artykule.
 \end{itemize}
 
-\begin{thebibliography}{9}
+\begin{thebibliography}{georgiev2019}
 \bibitem{park2021}
 J.~Park, J.~Lee, T.~Kim, I.~Ahn, J.~Park.
 \newblock Co-Evolution of Predator-Prey Ecosystems by Reinforcement Learning Agents.
 \newblock \emph{Entropy} 2021, \emph{23}(4), 461.
 \newblock \url{https://doi.org/10.3390/e23040461}
+\bibitem{georgiev2019}
+M.~Georgiev, I.~Tanev, K.~Shimohara.
+\newblock Coevolution of the Asymmetric Morphology and the Behaviour of Simple Predator Agents in Predator-Prey Pursuit Problem.
+\newblock \emph{Computational Intelligence and Neuroscience}, 2019, art.\ 1538757.
+\newblock \url{https://doi.org/10.1155/2019/1538757}
 \end{thebibliography}
 
 \end{document}
