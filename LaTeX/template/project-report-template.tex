@@ -1,0 +1,314 @@
+%%%%%% -*- Coding: utf-8-unix; Mode: latex
+
+%\documentclass[polish]{projectreport}
+\documentclass[english]{projectreport}
+
+\usepackage[utf8]{inputenc}
+\usepackage{url}
+\usepackage{subfigure}
+\usepackage{tabularx}
+\usepackage{ragged2e}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{grffile}
+
+\usepackage[bookmarks=false]{hyperref}
+\hypersetup{colorlinks,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue}
+
+\usepackage{indentfirst}
+\usepackage{caption}
+\usepackage{listings}
+\usepackage[ruled,linesnumbered,lined]{algorithm2e}
+\usepackage[svgnames]{xcolor}
+\usepackage{inconsolata}
+\usepackage{fancyhdr}
+
+\usepackage{csquotes}
+\DeclareQuoteStyle[quotes]{polish}
+  {\quotedblbase}
+  {\textquotedblright}
+  [0.05em]
+  {\quotesinglbase}
+  {\fixligatures\textquoteright}
+\DeclareQuoteAlias[quotes]{polish}{polish}
+
+\usepackage[
+style=numeric,
+sorting=nyt,
+isbn=false,
+doi=true,
+url=true,
+backref=false,
+backrefstyle=none,
+maxnames=10,
+giveninits=true,
+abbreviate=true,
+defernumbers=false,
+backend=biber]{biblatex}
+\addbibresource{bibliography.bib}
+
+\lstset{
+    %language=Python, %% PHP, C, Java, etc.
+    basicstyle=\ttfamily\footnotesize,
+    backgroundcolor=\color{gray!5},
+    commentstyle=\it\color{Green},
+    keywordstyle=\color{Red},
+    stringstyle=\color{Blue},
+    numberstyle=\tiny\color{Black},    
+    % morekeywords={TestKeyword},
+    % mathescape=true,
+    escapeinside=`',
+    frame=single, %shadowbox, 
+    tabsize=2,
+    rulecolor=\color{black!30},
+    title=\lstname,
+    breaklines=true,
+    breakatwhitespace=true,
+    framextopmargin=2pt,
+    framexbottommargin=2pt,
+    extendedchars=false,
+    captionpos=b,
+    abovecaptionskip=5pt,
+    keepspaces=true,            
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2
+}
+
+\SetAlgorithmName{\LangAlgorithm}{\LangAlgorithmRef}{\LangListOfAlgorithms}
+
+\renewcommand{\lstlistingname}{\LangListing}
+\renewcommand\lstlistlistingname{\LangListOfListings}
+
+\newcolumntype{Y}{>{\small\centering\arraybackslash}X}
+%\newcolumntype{b}{>{\hsize=1.6\hsize}Y}
+%\newcolumntype{m}{>{\hsize=.6\hsize}Y}
+%\newcolumntype{s}{>{\hsize=.4\hsize}Y}
+
+\captionsetup[figure]{skip=5pt,position=bottom}
+\captionsetup[table]{skip=5pt,position=top}
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\author{John Smith$^1$ \and Joe Doe$^2$}
+
+\title{The application of evolutionary algorithms and neural networks in economic and financial problems}
+
+\date{
+	{\small $^1$Organization 1 \\ \texttt{auth1@org1.edu}\\[1ex]%
+	$^2$Organization 2 \\ \texttt{auth2@org2.edu}\\[2ex]%
+        \the\year}
+      }
+      
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\thepage}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{document}
+
+\maketitle
+
+\thispagestyle{empty}
+
+\begin{abstract}
+\noindent Abstract of the paper
+  
+\noindent\textbf{Keywords:} evolutionary algorithms, neural networks
+\end{abstract}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+\section{\SectionTitleIntroduction}
+\label{sec:introduction}
+
+% the following content of the section should be removed from the final version of the report.
+
+\emph{Introduction to the selected research area. Review of the related research works. Formulation of the research goals. Main contributions of the conducted research. A brief overview of the content of the remaining sections of the report.}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection{Citations}
+\label{sec:citations}
+
+An example of citing literature~\cite{chmaj2015DistributedProcessingApplications}. Another example of citing several references~\cite{wilson2009prediction-interday, allen1999using-genetic, zitzler1999evolutionary-algorithms, pictet1995genetic-algorithms, wilhelmstotter2021jenetics}.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection{Lists}
+\label{sec:lists}
+
+Exemplary list:
+\begin{itemize}
+\item first item,
+\item second item,
+\item third item.
+\end{itemize}
+
+Exemplary numbered list with longer items:
+\begin{enumerate}
+\item The first item in the list.
+\item The second item in the list.
+\item The third item in the list.
+\end{enumerate}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{\SectionTitleProblemSolution}
+\label{sec:solution}
+
+% the following content of the section should be removed from the final version of the report.
+
+\emph{Research problem formulation. Proposal of the solution: detailed description of the algorithms/system/framework.}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection{Equations}
+\label{sec:equations}
+
+Exemplary equation with reference to literature~\cite{author2021title}:
+
+\begin{equation}
+\Omega = \sum_{i=1}^n \gamma_i
+\label{eq:sum}
+\end{equation}
+
+Exemplary reference to Equation~\eqref{eq:sum}.
+
+Exemplary, unnumbered equation placed within the text: $\lambda = \sum_{i=1}^n \delta_i$.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection{Algorithms}
+\label{sec:algorithms}
+
+Listing~\ref{lst:maximum} shows an exemplary fragment of source code.
+
+\begin{lstlisting}[language=Python,float=!htbp,caption={Exemplary fragment of source code (source:
+  \cite{author2021title})},label=lst:maximum]
+# The maximum of two numbers
+
+def maximum(x, y):
+
+    if x >= y:
+        return x
+    else:
+        return y
+
+x = 2
+y = 6
+print(maximum(x, y),"is the largest of the numbers ", x, " and ", y)
+
+\end{lstlisting}
+
+Algorithm~\ref{alg:pseudo-code} shows an exemplary pseudo-code presented in~\cite{fiorio2017algorithm2e}.
+
+\begin{algorithm}[!htbp]
+\SetKwData{Left}{left}\SetKwData{This}{this}\SetKwData{Up}{up}
+\SetKwFunction{Union}{Union}\SetKwFunction{FindCompress}{FindCompress}
+\SetKwInOut{Input}{input}\SetKwInOut{Output}{output}
+\Input{A bitmap $Im$ of size $w\times l$}
+\Output{A partition of the bitmap}
+\BlankLine
+\emph{special treatment of the first line}\;
+\For{$i\leftarrow 2$ \KwTo $l$}{
+\emph{special treatment of the first element of line $i$}\;
+\For{$j\leftarrow 2$ \KwTo $w$}{\label{forins}
+\Left$\leftarrow$ \FindCompress{$Im[i,j-1]$}\;
+\Up$\leftarrow$ \FindCompress{$Im[i-1,]$}\;
+\This$\leftarrow$ \FindCompress{$Im[i,j]$}\;
+\If(\tcp*[h]{O(\Left,\This)==1}){\Left compatible with \This}{\label{lt}
+\lIf{\Left $<$ \This}{\Union{\Left,\This}}
+\lElse{\Union{\This,\Left}}
+}
+\If(\tcp*[f]{O(\Up,\This)==1}){\Up compatible with \This}{\label{ut}
+\lIf{\Up $<$ \This}{\Union{\Up,\This}}
+\tcp{\This is put under \Up to keep tree as flat as possible}\label{cmt}
+\lElse{\Union{\This,\Up}}\tcp*[h]{\This linked to \Up}\label{lelse}
+}
+}
+\lForEach{element $e$ of the line $i$}{\FindCompress{p}}
+}
+  \caption[Exemplary algorithm]{Exemplary algorithm (source: \cite{fiorio2017algorithm2e}).}
+  \label{alg:pseudo-code}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{\SectionTitleExperiments}
+\label{sec:experiments}
+
+% the following content of the section should be removed from the final version of the report.
+
+\emph{Experimental research results with detailed analyses and comments.}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection{Figures and tables}
+\label{sec:figures-tables}
+
+The text should contain references to all figures and tables used in the paper.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsubsection{Figures}
+\label{sec:figures}
+
+Examplary reference to Figure~\ref{fig:ex1}.
+
+\begin{figure}[!htbp]
+  \centering
+\includegraphics[width=.7\textwidth]{example.pdf}
+\caption{Exemplary figure (source: \cite{author2021title})}
+\label{fig:ex1}
+\end{figure}
+
+In the case of figures, you can refer to individual subfigures (Figure~\ref{fig:sub1} and Figure~\ref{fig:sub2}) and to the entire Figure~\ref{fig:ex2}.
+
+\begin{figure}[!htbp]
+\begin{center}
+\subfigure[Title 1]{%
+\label{fig:sub1}
+\includegraphics[width=0.48\textwidth]{example.pdf}}%
+\subfigure[Title 2]{%
+\label{fig:sub2}
+\includegraphics[width=0.48\textwidth]{example.pdf}}
+\end{center}
+\caption{Another exemplary figures (source: \cite{author2021title})}
+\label{fig:ex2}
+\end{figure}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+\subsubsection{Tables}
+\label{sec:tables}
+
+Exemplary Table~\ref{tab:ex1}.
+
+\begin{table}[!htbp]
+\centering
+\caption[Exemplary table]{Exemplary table}
+\begin{tabularx}{\columnwidth}{@{}YYYYYYY@{}} \toprule
+  & \multicolumn{2}{c}{\small\textbf{Best}} & \multicolumn{2}{c}{\small\textbf{Average}} & \multicolumn{2}{c}{\small\textbf{Worst}} \\ \cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+  \textbf{No.} & \textbf{AB} & \textbf{CD} & \textbf{FE} & \textbf{GH} & \textbf{IJ} & \textbf{KL} \\ \midrule
+  \textit{1.} & 10 & 89 & 58 & 244 & 6 & 70 \\  
+  \textit{2.} & 15 & 87 & 57 & 147 & 4 & 82 \\
+  \textit{3.} & 23 & 45 & 55 & 151 & 2 & 38 \\
+  \textit{4.} & 34 & 90 & 55 & 246 & 1 & 82 \\
+  \textit{5.} & 56 & 75 & 54 & 255 & 0 & 73 \\ \bottomrule
+\end{tabularx}
+\label{tab:ex1}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{\SectionTitleSummary}
+\label{sec:conclusions}
+
+% the following content of the section should be removed from the final version of the report.
+
+\emph{Summary of the research results, conclusions and plans for further work.}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\printbibliography
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\end{document}

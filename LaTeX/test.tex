@@ -1,21 +1,30 @@
-\documentclass[11pt,a4paper]{article}
+%%%%%% -*- Coding: utf-8-unix; Mode: latex
 
-\usepackage[T1]{fontenc}
+\documentclass[polish]{template/projectreport}
+
 \usepackage[utf8]{inputenc}
-\usepackage[polish]{babel}
-\usepackage{amsmath,amssymb}
-\usepackage{graphicx}
+\usepackage{url}
 \usepackage{booktabs}
 \usepackage{adjustbox}
-\usepackage{url}
-\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{indentfirst}
+\usepackage{csquotes}
+\DeclareQuoteStyle[quotes]{polish}
+  {\quotedblbase}
+  {\textquotedblright}
+  [0.05em]
+  {\quotesinglbase}
+  {\fixligatures\textquoteright}
+\DeclareQuoteAlias[quotes]{polish}{polish}
 
-\hypersetup{
-  colorlinks=true,
+\captionsetup[figure]{skip=5pt,position=bottom}
+\captionsetup[table]{skip=5pt,position=top}
+
+\usepackage[bookmarks=false]{hyperref}
+\hypersetup{colorlinks,
   linkcolor=blue,
-  urlcolor=blue,
-  citecolor=blue
-}
+  citecolor=blue,
+  urlcolor=blue}
 
 \title{Koewolucja w systemach drapieżnik-ofiara}
 \author{Wojciech Maćkowiak}
@@ -23,6 +32,8 @@
 
 \begin{document}
 \maketitle
+
+\thispagestyle{empty}
 
 \begin{abstract}
 Praca dotyczy eksploracji symulacji agentowych, w których można obserwować \emph{koewolucję} --- wzajemną adaptację zachowań populacji drapieżników i ofiar osadzonych we wspólnym środowisku.
