@@ -168,7 +168,7 @@ Drugi prototyp redukuje scenariusz do konfrontacji drapieżnik--ofiara bez pełn
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.95\textwidth]{system_2/2___prey_ewolucja_potem_wygaśnięcie_specjalicaji_i_brak_nowych_cech.png}
-  \caption{Tymczasowa ewolucja ofiar, po spadku liczebności, powrót to stanu gdzie ewolucja cech jest nieosiągalna.}
+  \caption{Tymczasowa ewolucja ofiar, a potem jej wstrzymanie po spadku liczebności}
   \label{fig:sys2-2}
 \end{figure}
 
@@ -182,18 +182,18 @@ Drugi prototyp redukuje scenariusz do konfrontacji drapieżnik--ofiara bez pełn
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.95\textwidth]{system_2/4___cykle_w_populacji_mutacja_tylko_jednej_grupy_na_raz_wszystkie_idą_w_rozwój_tylko_w_jednej_cechy.png}
-  \caption{Cykle populacji przy mutacji naprzemiennie tylko jednej grupy --- rozwój skoncentrowany w jednej cesze.}
+  \caption{Cykle populacji przy mutacji naprzemiennie tylko jednej grupy - brak zmiany strategii, rozwój skoncentrowany na jednej cesze.}
   \label{fig:sys2-4}
 \end{figure}
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.95\textwidth]{system_2/5___lekkie_cykle_znowu_ewolucja_tylko_jednej_cechy_dłuższe_okresy_periodycznej_mutacji.png}
-  \caption{Łagodniejsze cykle przy dłuższych okresach periodycznej mutacji jednej grupy.}
+  \caption{Łagodniejsze cykle przy dłuższych okresach periodycznej mutacji jednej grupy. Ponownie rozwój tylko jednej cechy.}
   \label{fig:sys2-5}
 \end{figure}
 
-Powyższe eksperymenty zilustrowały, że bogatszy opis biologiczny i wielowymiarowy genotyp utrudniają wyciąganie prostych wniosków o koewolucji w porównaniu z modelem z sekcji~\ref{sec:park}.
+Powyższe eksperymenty zilustrowały, że bogatszy opis biologiczny i wielowymiarowy genotyp utrudniają wyciąganie prostych wniosków o koewolucji w porównaniu z modelem z sekcji~\ref{sec:park}. Dodatkowo mnogość parametrów środowiska oraz złożoność całego systemu sprawia, że najmniejsza zmiana drastycznie wpływa na dynamikę systemu. Widać, że im bardziej złożnych system tym ciężej zaobserwować poszukiwane cykle populacji i koewolucję. Dlatego redukcja złożności okazuje się być istotnym krokiem umożliwiającym zaobserwowanie koewolucji.
 
 % --------------------------------------------------------------------------
 \section{Implementacja według Park et al.\ (2021)}
@@ -320,6 +320,15 @@ Na rys.~\ref{fig:fig3} widać, że po uczeniu przebiegi bywają stabilniejsze lu
   \item Eksperyment z rys.~\ref{fig:fig5} pokazuje behawioralne przejście od eksploracji losowej do polityk uczenia --- z różnym skutkiem dla różnych ziaren, co warto traktować jako ograniczenie pojedynczego treningu bez dodatkowej selekcji hiperparametrów.
   \item Ograniczenia repozytorium względem pełnej pracy~\cite{park2021}: brak gotowej reprodukcji wszystkich rysunków jakościowych (np.\ trajektorie przestrzenne jak Fig.~6--7), deterministyczna kolejność ruchów agentów oraz domyślna liczba zewnętrznych iteracji (30) ustawiona pod wygodę eksperymentu, a nie identycznie z opisem ,,kilkudziesięciu'' iteracji w artykule.
 \end{itemize}
+
+
+\section{Podsumowanie całej pracy}
+\label{sec:podsumowanie}
+Niniejszy raport łączy dwie linie: eksplorację własnych symulacji agentowych (łańcuch troficzny z energią i roślinami jako punkt odniesienia oraz bogatszy model polowania/ucieczki z algorytmem genetycznym) z odtworzeniem środowiska i procedury uczenia z pracy Park et al.~\cite{park2021}.
+Pierwsze prototypy pokazały typowe oscylacje drapieżnik--ofiara oraz trudność uzyskania czytelnej koewolucji przy wielu mechanikach i parametrach --- najmniejsza zmiana ustawień potrafiła zdominować obraz dynamiki.
+W efekcie naturalnym krokiem okazała się redukcja złożoności: uproszczona gra na siatce z lokalnymi obserwacjami, współdzielonymi politykami i koewolucją napędzaną przez uczenie ze wzmocnieniem daje porównywalny z literaturą punkt wyjścia i wygodniejszą ramę do porównań (m.in.\ polityka losowa kontra wytrenowana, różne ziarna).
+Łączny wniosek jest zgodny z motywacją z abstraktu: im bardziej rozbudowany jest świat agentów, tym trudniej w sposób kontrolowany zaobserwować i opisać wzajemną adaptację populacji; świadome uproszczenie modelu i metody --- tutaj w wariancie inspirowanym Park et al. --- ułatwia skupienie się na samej interakcji drapieżników i ofiar.
+
 
 \begin{thebibliography}{georgiev2019}
 \bibitem{park2021}
