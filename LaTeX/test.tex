@@ -40,7 +40,7 @@ Praca dotyczy eksploracji symulacji agentowych, w których można obserwować \e
 Badane było, czy w bogatszych modelach (więcej gatunków i mechanik, rozbudowane parametry agentów oraz ewolucja genetyczna) pojawiają się równie wyraźne i łatwe do interpretacji wzorce, jak w uproszczonych ustawieniach opisywanych w literaturze.
 Wiele prac sugeruje, że czytelna koewolucja wymaga silnego ograniczenia złożoności: przykładem jest artykuł Georgiev, Tanev i Shimohary~\cite{georgiev2019}, w którym prości drapieżnicy z pojedynczym sensorem pola widzenia i algorytm genetyczny prowadzą do współewolucji uproszczonej morfologii czujnika oraz zachowania polowania.
 W projekcie zrealizowano dwa wcześniejsze prototypy (łańcuch troficzny z energią; system polowania/ucieczki z wieloma cechami i GA), a następnie odtworzono model Park et al.~\cite{park2021} z uczeniem ze wzmocnieniem na dyskretnej siatce.
-Ostatecznie to ostatnie, ściśle zdefiniowane środowisko okazało się najwygodniejsze do stabilnej obserwacji interakcji w duchu koewolucji, podczas gdy bardziej rozbudowane symulacje dawały mniej przejrzysty obraz dynamiki.
+Ostatecznie to ostatnie, ściśle zdefiniowane i uproszczone środowisko okazało się najwygodniejsze do stabilnej obserwacji interakcji w duchu koewolucji, podczas gdy bardziej rozbudowane symulacje dawały mniej przejrzysty obraz dynamiki oraz były znaczniej trudniejsze do zaprojektowania i zbalansowania.
 \end{abstract}
 
 % --------------------------------------------------------------------------
@@ -54,7 +54,7 @@ Oba podejścia dostarczyły cennych obserwacji przestrzennych i populacyjnych, l
 \subsection{Pierwsze podejście: drapieżnik, ofiara, roślina}
 
 Modele trzech poziomów: \textbf{drapieżnik} poluje na \textbf{ofiare}, ofiara żeruje na \textbf{roślinach}.
-Świat jest dwuwymiarową siatką; agenci poruszają się w osiem sąsiadów Moore'a (także po przekątnych) lub pozostają na miejscu, w zależności od implementacji interfejsu.
+Świat jest dwuwymiarową siatką; agenci poruszają się w osiem sąsiadów Moore'a lub pozostają na miejscu.
 
 \textbf{Energia i śmierć.} Każdy ruch zużywa energię; przy zerowej energii jednostka ginie.
 
@@ -83,9 +83,9 @@ Przy \emph{ścianach} ofiary mogą zostać zepchnięte do krawędzi i otoczone p
   \begin{adjustbox}{max width=\linewidth}
   \begin{tabular}{@{}p{1.6cm}p{1.4cm}p{4.8cm}p{2.5cm}p{1.7cm}@{}}
     \toprule
-    Pole & Ruch & Zasady & Rozmnażanie & Param.\ / ewo\-lucja \\
+    Pole & Ruch & Zasady & Rozmnażanie & Ewolucja \\
     \midrule
-    Siatka 2D & 8 kier.\ (+ ewent.\ bez ruchu) & Energia: ruch kosztuje; 0 = śmierć. Diety i padlina jak wyżej. Rośliny: spawn + sąsiedztwo. Drapieżniki bez losowego dosiewu; ofiary rzadko losowo. & Progi po roślinie / ofierze lub padlinie & Brak \\
+    Siatka 2D & 9 kier. & Energia: ruch kosztuje; 0 = śmierć. Diety i padlina jak wyżej. Rośliny: spawn + sąsiedztwo. Drapieżniki bez losowego dosiewu; ofiary rzadko losowo. & Progi energetyczne po zjedzeniu \emph{rośliny, ofiary, padliny} & Brak \\
     \bottomrule
   \end{tabular}
   \end{adjustbox}
@@ -94,24 +94,28 @@ Przy \emph{ścianach} ofiary mogą zostać zepchnięte do krawędzi i otoczone p
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.95\textwidth]{system_1/1___population_cycles.png}
-  \caption{Pierwszy system: przykładowe oscylacje liczebności roślin, ofiar i drapieżników w czasie.}
+  \caption{Przykładowe oscylacje liczebności roślin, ofiar i drapieżników w czasie.}
   \label{fig:sys1-pop}
 \end{figure}
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.95\textwidth]{system_1/2___fale.png}
-  \caption{Pierwszy system: widoczne fale przestrzenne (ofiara przed drapieżnikiem w pasach zajętości siatki).}
+  \caption{Widoczne fale przestrzenne (ofiara przed drapieżnikiem w pasach zajętości siatki).}
   \label{fig:sys1-fale}
 \end{figure}
+
+\textbf{Podsumowanie.}
+Chodziło przede wszystkim o to, by sprawdzić, w jakich warunkach brzegowych i przy jakich zasadach sensownie będzie później prowadzić eksperymenty oraz jak ustalić punkt odniesienia: w tym modelu bez ewolucji indywidualnych cech widać typowe oscylacje i zachowanie zbliżone do klasycznego układu drapieżnik--ofiara.
+Jednocześnie symulacja dość szybko wygasała; w następnych iteracjach zmieniono więc świat tak, by losowo dosiewać nowe ofiary i drapieżniki i w ten sposób podtrzymywać przebieg symulacji, a także zrezygnowano z roślin --- w praktyce wzmacniały one efekty fali: ofiary ścigały plamy roślinności, tuż za nimi podążały drapieżniki, co utrudniało traktowanie tego etapu jako stabilnej bazy do porównań z mechanizmami opartymi na ewolucji i uczeniu.
 
 \subsection{Drugie podejście: polowanie, parametry i algorytm genetyczny}
 
 Drugi prototyp redukuje scenariusz do konfrontacji drapieżnik--ofiara bez pełnego łańcucha troficznego roślina--ofiara, kładąc nacisk na wiele cech osobnika i ewolucję.
 
-\textbf{Pole i ruch.} Siatka 2D; ruch w kierunkach również przekątnych.
+\textbf{Pole i ruch.} Siatka 2D; Ruch jako uprzednio (sąsiedztwo Moore'a).
 
-\textbf{Życie i śmierć.} Drapieżniki giną z głodu. Ofiary giną po schwyceniu lub ze starości.
+\textbf{Życie i śmierć.} Drapieżniki giną z głodu. Ofiary giną po schwytaniu lub ze starości.
 
 \textbf{Koewolucja ``w stylu kamień--papier--nożyce''.} Agenci rozwijają cechy pod polowanie lub ucieczkę; jedna strona eksploatuje lukę w zachowaniu przeciwnika, dopóki druga nie ,,kontruje'' modyfikacją parametrów --- strategie i nisze zmieniają się w czasie.
 
@@ -148,7 +152,7 @@ Drugi prototyp redukuje scenariusz do konfrontacji drapieżnik--ofiara bez pełn
     \toprule
     Pole & Ruch & Zasady & Rozmnażanie & Param.\ / ewo\-lucja \\
     \midrule
-    Siatka 2D & 8 kier.\ (+ przekątne) & Głód drapieżników; ofiary: schwycenie lub wiek. Koewolucja cech (RPS); stamina + regen. & Ofiary spontanicznie; drapieżniki po ofierze & Wieloczynnikowy genotyp; GA \\
+    Siatka 2D & 9 kier. & Głód drapieżników; ofiary: schwytanie lub wiek. Koewolucja cech (RPS) & Ofiary spontanicznie; drapieżniki po ofierze & Wieloparametryczny genotyp; GA \\
     \bottomrule
   \end{tabular}
   \end{adjustbox}
@@ -157,35 +161,35 @@ Drugi prototyp redukuje scenariusz do konfrontacji drapieżnik--ofiara bez pełn
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.95\textwidth]{system_2/1___prey_brak_ewolucji.png}
-  \caption{Drugi system: przykład przebiegu przy braku ewolucji ofiar (scenariusz referencyjny).}
+  \caption{Braku ewolucji ofiar, spowodowany szybszą adaptacją Hunter'a, łapie ofiary na tyle skutecznie, że nie są one w stanie wykształcić odporności}
   \label{fig:sys2-1}
 \end{figure}
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.95\textwidth]{system_2/2___prey_ewolucja_potem_wygaśnięcie_specjalicaji_i_brak_nowych_cech.png}
-  \caption{Drugi system: ewolucja ofiar, wygaszenie specjalizacji i brak nowych cech.}
+  \caption{Tymczasowa ewolucja ofiar, po spadku liczebności, powrót to stanu gdzie ewolucja cech jest nieosiągalna.}
   \label{fig:sys2-2}
 \end{figure}
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.95\textwidth]{system_2/3___brak_cykli_widoczna_ewolucja_w_obydwu_grupach_małe_zmiany_strategii.png}
-  \caption{Drugi system: brak wyraźnych cykli przy ewolucji obu stron i małych zmianach strategii.}
+  \caption{Brak wyraźnych cykli przy ewolucji obu stron i małych zmianach strategii.}
   \label{fig:sys2-3}
 \end{figure}
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.95\textwidth]{system_2/4___cykle_w_populacji_mutacja_tylko_jednej_grupy_na_raz_wszystkie_idą_w_rozwój_tylko_w_jednej_cechy.png}
-  \caption{Drugi system: cykle populacji przy mutacji naprzemiennie tylko jednej grupy --- rozwój skoncentrowany w jednej cesze.}
+  \caption{Cykle populacji przy mutacji naprzemiennie tylko jednej grupy --- rozwój skoncentrowany w jednej cesze.}
   \label{fig:sys2-4}
 \end{figure}
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=0.95\textwidth]{system_2/5___lekkie_cykle_znowu_ewolucja_tylko_jednej_cechy_dłuższe_okresy_periodycznej_mutacji.png}
-  \caption{Drugi system: łagodniejsze cykle przy dłuższych okresach periodycznej mutacji jednej grupy.}
+  \caption{Łagodniejsze cykle przy dłuższych okresach periodycznej mutacji jednej grupy.}
   \label{fig:sys2-5}
 \end{figure}
 
